@@ -25,3 +25,4 @@ data/processed/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+notebooks/.ipynb_checkpoints/
