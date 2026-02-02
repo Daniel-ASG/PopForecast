@@ -15,36 +15,78 @@ This document records the **exact steps that worked** (and the rationale behind 
 
 ### 2. Environment setup (WSL / Ubuntu 22.04)
 
-- **Python version:** Python **3.10.12** (library compatibility for the MVP).
-- **Isolation with pyenv:**
-  ```bash
-  pyenv install 3.10.12
-  pyenv virtualenv 3.10.12 popforecast-env
-  pyenv local popforecast-env
-  pip install --upgrade pip
-````
+- **Python version:** Python **3.10.12** (managed by pyenv)
+- **Environment isolation:** Poetry manages the virtual environment; pyenv provides only the Python interpreter.
+
+```bash
+pyenv install 3.10.12
+pyenv local 3.10.12
+```
+
+- **Poetry installation (global):**
+
+```bash
+curl -sSL https://install.python-poetry.org | python3 -
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
 
 ---
 
 ### 3. Dependency management (Poetry)
 
-* **Initialization:**
+Poetry is used exclusively for dependency management and virtual‑environment creation.  
+Python itself is provided by pyenv, but **no pyenv virtualenvs are used** for this project.
 
-  ```bash
-  pip install poetry
-  poetry init --no-interaction
-  ```
+#### 3.1 Poetry installation (global)
 
-* **Install packages (conflict resolution):**
+Poetry is installed globally (outside any virtual environment) using the official installer (see Section 2).
 
-  * Constraint: `kaggle` and recent `scikit-learn` versions can require newer Python; `streamlit` requires `pandas<3`.
-  * MVP decision: pin compatible versions for Python 3.10.
+This ensures consistent behavior across machines and avoids conflicts with pyenv‑managed environments.
 
-  ```bash
-  poetry add "pandas<3.0.0" "scikit-learn<1.8" xgboost streamlit fastapi uvicorn pyarrow "kaggle<1.8"
-  ```
+#### 3.2 Project initialization
 
-* **Status:** dependencies installed and `poetry.lock` generated.
+The project was initialized with Poetry:
+
+```bash
+poetry init --no-interaction
+```
+
+#### 3.3 Dependency installation
+
+Cycle 1 requires versions compatible with Python 3.10.  
+Pinned constraints reflect compatibility considerations (e.g., `pandas<3`, `scikit-learn<1.8`, `kaggle<1.8`).
+
+```bash
+poetry add "pandas<3.0.0" "scikit-learn<1.8" xgboost streamlit fastapi uvicorn pyarrow "kaggle<1.8"
+```
+
+Development dependencies:
+
+```bash
+poetry add --group dev jupyterlab jupyterlab-execute-time matplotlib ipykernel
+```
+
+#### 3.4 Package mode disabled
+
+The project is notebook‑first and not intended to be installed as a Python package in Cycle 1.  
+To avoid Poetry attempting to install the project itself, `package-mode = false` is set in `pyproject.toml`:
+
+```toml
+[tool.poetry]
+package-mode = false
+```
+
+#### 3.5 Environment creation
+
+Poetry creates and manages its own virtual environment automatically.  
+To ensure it uses the correct Python version from pyenv:
+
+```bash
+pyenv local 3.10.12
+poetry env use $(pyenv which python)
+poetry install
+```
 
 ---
 
@@ -252,7 +294,9 @@ On a clean machine, `poetry install` can fail when `.python-version` points to a
 * Point Poetry to the correct interpreter:
 
   ```bash
-  poetry env use <path-to-python-or-python3>
+  pyenv install 3.10.12          # if not already installed
+  pyenv local 3.10.12
+  poetry env use $(pyenv which python)
   poetry install
   ```
 
@@ -276,6 +320,27 @@ Kaggle downloads fail on a new machine if credentials exist only on the previous
 
 **Cycle 1 rule:** treat external credentials as machine-local configuration.
 Ensure `~/.kaggle/kaggle.json` exists before re-running ingestion steps.
+
+#### 9.4 Poetry 2.x activation model
+
+Poetry 2.x no longer installs the `poetry shell` command by default.  
+Cycle 1 standard:
+
+```bash
+poetry env activate
+```
+
+(Optionally, users may install `poetry-plugin-shell` if they prefer the legacy `poetry shell` workflow.)
+
+#### 9.5 pyenv vs Poetry — separation of concerns
+
+Cycle 1 rule:
+
+- **pyenv provides the correct Python version**  
+- **Poetry creates and manages the virtual environment**  
+- **Do not use `pyenv virtualenv` for this project**
+
+This ensures consistent behavior across machines and avoids environment conflicts.
 
 ---
 
