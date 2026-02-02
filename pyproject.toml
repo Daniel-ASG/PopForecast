@@ -1,32 +1,28 @@
-[project]
+[tool.poetry]
 name = "popforecast"
 version = "0.1.0"
 description = ""
-authors = [
-    {name = "Your Name",email = "you@example.com"}
-]
-requires-python = ">=3.10"
-dependencies = [
-    "pandas (<3.0.0)",
-    "scikit-learn (<1.8)",
-    "xgboost (>=3.1.3,<4.0.0)",
-    "streamlit (>=1.53.1,<2.0.0)",
-    "fastapi (>=0.128.0,<0.129.0)",
-    "uvicorn (>=0.40.0,<0.41.0)",
-    "pyarrow (>=23.0.0,<24.0.0)",
-    "kaggle (<1.8)",
-    "seaborn (>=0.13.2,<0.14.0)"
-]
+authors = ["Daniel <daniel.alexandre.eng@gmail.com>"]
+package-mode = false
 
+[tool.poetry.dependencies]
+python = ">=3.10"
+pandas = "<3.0.0"
+scikit-learn = "<1.8"
+xgboost = ">=3.1.3,<4.0.0"
+streamlit = ">=1.53.1,<2.0.0"
+fastapi = ">=0.128.0,<0.129.0"
+uvicorn = ">=0.40.0,<0.41.0"
+pyarrow = ">=23.0.0,<24.0.0"
+kaggle = "<1.8"
+seaborn = ">=0.13.2,<0.14.0"
+
+[tool.poetry.group.dev.dependencies]
+jupyterlab = ">=4.5.3,<5.0.0"
+jupyterlab-execute-time = ">=3.3.0,<4.0.0"
+matplotlib = ">=3.10.8,<4.0.0"
+ipykernel = ">=7.1.0,<8.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
-
-[dependency-groups]
-dev = [
-    "jupyterlab (>=4.5.3,<5.0.0)",
-    "jupyterlab-execute-time (>=3.3.0,<4.0.0)",
-    "matplotlib (>=3.10.8,<4.0.0)",
-    "ipykernel (>=7.1.0,<8.0.0)"
-]
