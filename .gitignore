@@ -26,3 +26,4 @@ data/processed/*
 !data/processed/.gitkeep
 
 notebooks/.ipynb_checkpoints/
+tmp/
