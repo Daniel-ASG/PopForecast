@@ -357,10 +357,26 @@ Recommended commit structure:
 
 ---
 
-### 11. Open items carried into the next cycle
+### 11. Pipeline implementation (`src/core/preprocessing.py`)
 
-* Implement preprocessing inside a scikit-learn `Pipeline` (split-safe).
-* Implement baseline training notebook (beyond constant median) using the locked protocol.
-* Decide whether anomalies (`tempo == 0`, `time_signature == 0`) should become missing / special category / explicit flags.
-* Consolidate final cleaning decisions into a production cleaning function/script (once stable).
+* **Logic:** Implemented a `sklearn.Pipeline` wrapping custom functions.
+* **Key Decisions:**
+    * **Deduplication:** Strategy `keep="first"` after sorting by `popularity` (descending). Rationale: In case of ID conflict, the entry with higher signal (popularity) is the "true" one.
+    * **Year Handling:** `1900` treated as NaN. Flag `release_year_missing_or_suspect` created.
+    * **Type Safety:** Forced **Downcasting** (e.g., `Int16` for years to handle NaNs natively) and saving to Parquet to preserve schema.
+
+### 12. Baseline & Protocol (`notebooks/02_baseline_train.ipynb`)
+
+* **Models Tested:** Linear Regression (Naive) vs. Random Forest (Non-linear).
+* **Protocol:** Validated on both **Random Split** (IID) and **Temporal Split** (Train < 2020, Val=2020, Test=2021).
+* **Findings:**
+    * **Non-linearity confirmed:** Random Forest significantly outperformed Linear Regression.
+    * **Zero-Inflation:** Error analysis showed distinct behaviors for `popularity=0` vs `popularity>0`.
+    * **Temporal Drift:** Confirmed that temporal split is harder (higher error), validating the need for robust validation.
+
+### 13. Cycle 1 Closure & Decision
+
+* **Status:** ✅ COMPLETE.
+* **Verdict:** The infrastructure is solid, data is clean, and there is a learnable signal (RF > Dummy).
+* **Next Step (Cycle 2):** Focus on **Feature Engineering** to capture temporal context (Age, Seasonality) and Audio Interactions, as the baseline suggests simple features are not enough.
 
