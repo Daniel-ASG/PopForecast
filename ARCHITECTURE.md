@@ -27,10 +27,13 @@ The project follows a modified Hexagonal Architecture.
 .
 ├── data/               # Local data storage (Ignored by Git)
 │   ├── raw/            # Original CSVs
-│   └── processed/      # Parquet files
-├── notebooks/          # Jupyter Notebooks for EDA (Exploratory Data Analysis) only
+│   └── processed/      # Parquet files (Type-safe storage)
+├── notebooks/          # Experimental & Storytelling
+│   └── [00-99]_*.ipynb # Numbered sequence (e.g., 01_eda, 02_baseline)
 ├── src/                # Production Source Code
-│   ├── core/           # Business Logic, Preprocessing & Training
+│   ├── core/           # Domain Logic & ML Pipelines
+│   │   ├── preprocessing.py  # Cleaning pipelines (Sklearn)
+│   │   └── features.py       # Feature Engineering logic (Cycle 2+)
 │   ├── api/            # FastAPI Adapters
 │   ├── ui/             # Streamlit Application
 │   └── scripts/        # Automation (e.g., download_data.py)
