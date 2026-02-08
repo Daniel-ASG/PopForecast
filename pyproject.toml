@@ -22,6 +22,7 @@ jupyterlab = ">=4.5.3,<5.0.0"
 jupyterlab-execute-time = ">=3.3.0,<4.0.0"
 matplotlib = ">=3.10.8,<4.0.0"
 ipykernel = ">=7.1.0,<8.0.0"
+jupyterlab-hide-code = "^4.0.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
