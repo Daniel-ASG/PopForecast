@@ -1,0 +1,58 @@
+{
+  "cycle": 2,
+  "description": "Cycle 2 frozen config for Cycle 3 modeling (Robustness Pivot)",
+  "decision_split": {
+    "type": "temporal",
+    "train": "<=2019",
+    "val": "2020",
+    "test": "2021"
+  },
+  "guardrail_split": {
+    "type": "random",
+    "train": 0.7,
+    "val": 0.1,
+    "test": 0.2
+  },
+  "metrics": [
+    "mae",
+    "rmse",
+    "r2",
+    "mae_zero",
+    "mae_pos",
+    "pct_zero_true",
+    "pred_zero_pct"
+  ],
+  "feature_engineering": {
+    "temporal": true,
+    "audio_interactions": true,
+    "non_linear": true,
+    "market": true,
+    "year_meta": false,
+    "current_year": 2021,
+    "age_bins": [
+      2,
+      5,
+      10
+    ],
+    "regime_year_thresholds": [
+      2015,
+      2018
+    ],
+    "year_smoothing": 0.0,
+    "min_year_count": 1
+  },
+  "recency_weighting": {
+    "lambda": 0.05,
+    "reason": "most conservative; avoids test degradation seen with higher lambdas"
+  },
+  "strategy_pivot": {
+    "baseline_champions (test_mae_2021)": {
+      "Huber_Regressor": 15.2126,
+      "Random_Forest_Regressor_small": 15.3178,
+      "Hist_Gradient_Boosting_Regressor": 15.5523
+    },
+    "next_experiment": "gradient_boosting_with_robust_loss",
+    "hurdle_reference_threshold": 0.32,
+    "hurdle_status": "reference_only"
+  }
+}
