@@ -28,6 +28,8 @@ The project follows a modified Hexagonal Architecture.
 ├── data/               # Local data storage (Ignored by Git)
 │   ├── raw/            # Original CSVs
 │   └── processed/      # Parquet files (Type-safe storage)
+├── models/             # Serialized models & configuration snapshots
+│   └── cycle_02/       # Artifacts specific to Cycle 2
 ├── notebooks/          # Experimental & Storytelling
 │   └── [00-99]_*.ipynb # Numbered sequence (e.g., 01_eda, 02_baseline)
 ├── src/                # Production Source Code
