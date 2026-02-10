@@ -380,51 +380,26 @@ Recommended commit structure:
 * **Verdict:** The infrastructure is solid, data is clean, and there is a learnable signal (RF > Dummy).
 * **Next Step (Cycle 2):** Focus on **Feature Engineering** to capture temporal context (Age, Seasonality) and Audio Interactions, as the baseline suggests simple features are not enough.
 
-## 📅 CYCLE 02 — ADVANCED FEATURE ENGINEERING (feature pipeline + enrichment experiments)
+## 📅 CYCLE 02 — ADVANCED FEATURE ENGINEERING & ROBUST BASELINE
 
-### 1. Added feature engineering module (src/core/features.py)
+### 1. Feature Engineering Pipeline (Finalized)
+* **New Blocks Implemented:** `audio_interactions` (interactions between user/item features), `non_linear` (polynomials), `market` (regional stats), and `temporal`.
+* **Leakage Prevention:** Removed `year_meta` (aggregate stats per year) as it proved risky for temporal splits.
+* **Weighting:** Fixed `recency_lambda = 0.05` (conservative setting) after testing showed higher values degraded test generalization.
 
-	- Introduced split-safe feature engineering pipeline for Cycle 2 (temporal decay, audio interactions, simple non-linear transforms, market features).
-	- Key robustness decisions:
-	  - Preserve “unknown year” explicitly (avoid treating missing year as `False` in regime flags).
-	  - Prevent negative `age` (clip to >= 0) and expose “future release vs. train reference” via a dedicated flag.
-	- Added optional year-level target-encoding features (`year_popularity_mean`, `year_trend`) gated behind a transformer that must be fit on train with `y`.
+### 2. The "Hurdle" Experiment (Architecture & Failure)
+We tested the hypothesis that a Two-Stage Hurdle Model (Classifier + Regressor) would best handle the zero-inflation and concept drift observed in 2021.
+* **The "Collapse" Issue:** Unconstrained optimization drove the classification threshold to >0.90, effectively ignoring the classifier.
+* **Benchmarking (Test Set 2021):**
+    * ❌ **Hurdle Model:** MAE ~16.14 (Complex architecture struggled with error propagation).
+    * ✅ **HuberRegressor:** MAE ~15.21 (Winner). Its robust loss function successfully ignored the 2021 outliers.
+    * ✅ **RandomForest (Small):** MAE ~15.36. Better than Hurdle, confirming that regularization is key.
 
-### 2. Feature Engineering & Baseline Protocol (`notebooks/03_feature_engineering.ipynb`)
+### 3. Artifacts Frozen
+* **Config:** `models/cycle_02/frozen_config_cycle2.json` (Contains the finalized feature set, split protocols, and the pivot decision).
+* **Notebook:** `notebooks/03_feature_engineering.ipynb` (Refactored to document the robust baseline finding).
 
-* **Objective:** Consolidate feature engineering blocks and establish a rigorous evaluation protocol for Cycle 2.
-* **Feature Blocks Validated:**
-    * **Temporal:** `age` (decay), `is_modern`, `is_post_streaming_peak`, `year_zscore`.
-    * **Audio Interaction:** `emotional_intensity` (energy*valence), `punch`, `rap_speed`.
-    * **Non-linear:** Polynomials (`danceability_sq`, `energy_sq`), Log transforms (`log_duration`).
-    * **Market:** `markets_bucket`, `markets_zscore`.
-    * **Excluded:** `year_popularity_mean` / `year_trend` (Found 100% NaNs in Val/Test due to strict temporal split; removed to prevent leakage/OOD issues).
-
-* **Protocol Refinement:**
-    * **Dual Split Strategy:**
-        * **Random Split:** Sanity check (IID).
-        * **Temporal Split (Decision):** Train ≤ 2019, Val = 2020, Test = 2021.
-    * **Zero-Inflation Findings:** Confirmed drastic regime shift in 2021 (~23.9% zeros vs ~13% in 2020), weakening the Random Forest advantage over Linear Regression.
-
-### 3. Cycle 2 Experiments & Decisions
-
-* **Recency Weighting (Sample Weights):**
-    * **Experiment:** Micro-sweep of decay parameter `lambda` on temporal split.
-    * **Result:** Higher lambda improved Val (2020) slightly but failed to generalize to Test (2021).
-    * **Decision:** Fixed `lambda = 0.05` as a conservative baseline for all future models.
-
-* **Hurdle Model (Two-Stage):**
-    * **Architecture:** Logistic Regression (Zero vs Non-Zero) + Random Forest Regressor (Positives).
-    * **The "Collapse" Issue:** Unconstrained optimization of MAE drives the classification threshold to ≥0.90, effectively turning off the classifier (`pred_zero_pct ≈ 0%`) and converting the model into a pure regressor.
-    * **Decision (Constrained Optimization):** Adopted a "MAE-first, Zero-aware second" strategy.
-    * **Final Rule:** Select threshold that minimizes Val MAE **subject to** `pred_zero_pct ≥ 0.4%` (to ensure the model remains diagnostic).
-    * **Selected Threshold:** **0.36** (Optimal trade-off) or **0.32** (Better diagnostic visibility). *Final decision frozen in notebook.*
-
-* **Stability:**
-    * Encountered memory pressure with full RF. Mitigated by limiting complexity (`n_estimators=80`, `max_depth=20`, `n_jobs=4`).
-
-### 4. Next Steps (Cycle 2 Continuation)
-
-* **Immediate:** Freeze the Hurdle threshold (0.32 vs 0.36) based on the new guardrail rule.
-* **Modeling:** Expand to **Gradient Boosting** (HistGradientBoostingRegressor, XGBoost) to handle non-linearity and zeros better than RF.
-* **Evaluation:** Maintain the strict Temporal Split (2021 Test) as the primary decision metric due to the confirmed drift.
+### 4. Next Steps (Strategic Pivot for Cycle 3)
+* **Decision:** The Hurdle architecture is **deprecated**. We will not freeze a threshold for it.
+* **New Objective:** Combine the **non-linearity** of Trees with the **robustness** of the Huber Loss.
+* **Action:** Cycle 3 will implement **Gradient Boosting (XGBoost/LGBM)** configured specifically with Robust Objective Functions (Huber/Quantile) to synthesize the strengths of the top two performers.
