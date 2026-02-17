@@ -1,6 +1,6 @@
 {
   "cycle": 2,
-  "description": "Cycle 2 frozen config for Cycle 3 modeling (Robustness Pivot)",
+  "description": "Cycle 2 frozen config for Cycle 3 modeling (single-track: Huber-15 numeric-only). Engineered features kept as documented artifact but not the Cycle 3 benchmark track.",
   "decision_split": {
     "type": "temporal",
     "train": "<=2019",
@@ -22,37 +22,153 @@
     "pct_zero_true",
     "pred_zero_pct"
   ],
-  "feature_engineering": {
-    "temporal": true,
-    "audio_interactions": true,
-    "non_linear": true,
-    "market": true,
-    "year_meta": false,
-    "current_year": 2021,
-    "age_bins": [
-      2,
-      5,
-      10
-    ],
-    "regime_year_thresholds": [
-      2015,
-      2018
-    ],
-    "year_smoothing": 0.0,
-    "min_year_count": 1
+  "frozen_track_cycle3": {
+    "official_track": "numeric_only_15",
+    "engineered_track_status": "paused_in_cycle3",
+    "rule": "Never report a standalone 'champion MAE' without the protocol qualifier. Champions are always 'under <protocol_name>'."
   },
-  "recency_weighting": {
-    "lambda": 0.05,
-    "reason": "most conservative; avoids test degradation seen with higher lambdas"
+  "baseline_protocols": {
+    "Baseline_Huber15_recency0p05_medfill": {
+      "purpose": "Cycle 3 official benchmark anchor (fair comparison for challengers).",
+      "input_space": "15 raw numeric columns",
+      "numeric_cols": [
+        "album_release_year",
+        "acousticness",
+        "danceability",
+        "duration_ms",
+        "energy",
+        "instrumentalness",
+        "key",
+        "liveness",
+        "loudness",
+        "mode",
+        "speechiness",
+        "tempo",
+        "time_signature",
+        "total_available_markets",
+        "valence"
+      ],
+      "preprocessing": {
+        "column_filter": "numeric-only",
+        "imputation": {
+          "type": "SimpleImputer",
+          "strategy": "median",
+          "fit_scope": "train_only"
+        }
+      },
+      "recency_weighting": {
+        "enabled": true,
+        "lambda": 0.05,
+        "current_year": 2021,
+        "age_definition": "age = clip(current_year - album_release_year, lower=0)"
+      },
+      "model": {
+        "name": "HuberRegressor",
+        "params": {
+          "alpha": 0.0001,
+          "epsilon": 1.35,
+          "fit_intercept": true,
+          "max_iter": 100,
+          "tol": 1e-05,
+          "warm_start": false
+        }
+      },
+      "evaluation": {
+        "val_year": 2020,
+        "test_year": 2021,
+        "metrics": {
+          "mae_val_2020": 15.261278957800723,
+          "mae_test_2021": 15.212667070481631,
+          "pct_zero_test_2021": 23.869455605451822
+        },
+        "prediction_range_test_2021": {
+          "pred_min": -15.636086723517685,
+          "pred_max": 31.357097696169706
+        }
+      },
+      "hashes": {
+        "X_train_numeric_hash": "13046769200431973106",
+        "X_val_numeric_hash": "14649397147825154895",
+        "X_test_numeric_hash": "3358416359012077377",
+        "y_train_hash": "2450748903912899776",
+        "y_val_hash": "17415832452201736670",
+        "y_test_hash": "15508359024874058208",
+        "idx_train_hash": "17745924961938407296",
+        "idx_val_hash": "6924369080184951392",
+        "idx_test_hash": "1539615605918014350"
+      },
+      "env": {
+        "sklearn": "1.7.2",
+        "numpy": "2.2.6",
+        "pandas": "2.3.3"
+      },
+      "notes": [
+        "This protocol is the official Cycle 3 comparison anchor.",
+        "Challengers (e.g., XGBoost) must be evaluated under the same input space (15 numeric cols) and the same weighting protocol to be considered a fair comparison."
+      ]
+    }
   },
-  "strategy_pivot": {
-    "baseline_champions (test_mae_2021)": {
-      "Huber_Regressor": 15.2126,
-      "Random_Forest_Regressor_small": 15.3178,
-      "Hist_Gradient_Boosting_Regressor": 15.5523
+  "feature_engineering_artifact_cycle2": {
+    "status": "kept_as_documented_artifact_not_official_cycle3_track",
+    "fe_config_final": {
+      "temporal": true,
+      "audio_interactions": true,
+      "non_linear": true,
+      "market": true,
+      "year_meta": false,
+      "current_year": 2021,
+      "age_bins": [
+        2,
+        5,
+        10
+      ],
+      "regime_year_thresholds": [
+        2015,
+        2018
+      ],
+      "year_smoothing": 0.0,
+      "min_year_count": 1
     },
-    "next_experiment": "gradient_boosting_with_robust_loss",
-    "hurdle_reference_threshold": 0.32,
-    "hurdle_status": "reference_only"
+    "feature_count_total": 38,
+    "generated_features_count": 21,
+    "generated_features": [
+      "age",
+      "age_bin",
+      "danceability_sq",
+      "emotional_intensity",
+      "energy_sq",
+      "is_future_release",
+      "is_post_2015",
+      "is_post_2018",
+      "log_duration",
+      "markets_bucket",
+      "markets_zscore",
+      "punch",
+      "rap_speed",
+      "soft_mood",
+      "tempo_is_zero",
+      "tempo_log1p",
+      "tempo_zscore",
+      "valence_sq",
+      "vibe",
+      "year_is_missing",
+      "year_zscore"
+    ],
+    "notes": [
+      "Engineered feature set remains useful for later exploration, but it is not the Cycle 3 benchmark track under Option A.",
+      "If engineered features are reactivated, they must be benchmarked against a matching engineered baseline (e.g., Baseline_Huber38_...) to keep comparisons valid."
+    ]
+  },
+  "hurdle_status_cycle2": {
+    "status": "reference_only_deprecated_as_default",
+    "note": "Hurdle remains a diagnostic/reference baseline. Threshold is not frozen as a project decision under Option A."
+  },
+  "cycle3_next_experiment": {
+    "name": "gradient_boosting_with_robust_loss",
+    "constraint": "Must beat Baseline_Huber15_recency0p05_medfill on temporal test (2021) under the same protocol.",
+    "candidate_families": [
+      "scikit-learn HistGradientBoostingRegressor with robust losses (quantile/MAE-like)",
+      "XGBoost/LightGBM with robust objective (Huber/Quantile/Pseudo-Huber), if/when justified"
+    ]
   }
 }
