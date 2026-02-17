@@ -1,0 +1,94 @@
+{
+  "cycle": 3,
+  "timestamp_utc": "2026-02-16T21:56:47.747119+00:00",
+  "champion": {
+    "tag": "baseline_huber15",
+    "model_name": "HuberRegressor",
+    "protocol_name": "Baseline_Huber15_recency0p05_medfill",
+    "params": {
+      "alpha": 0.0001,
+      "epsilon": 1.35,
+      "fit_intercept": true,
+      "max_iter": 100,
+      "tol": 1e-05,
+      "warm_start": false
+    },
+    "selection": {
+      "decision_metric": "mae_test_2021_no_clip",
+      "reported_modes": [
+        "no_clip",
+        "clip_0_100"
+      ],
+      "clip_is_eval_only": true
+    },
+    "metrics": {
+      "val_2020_mae_no_clip": 15.261278957800723,
+      "test_2021_mae_no_clip": 15.212667070481631,
+      "val_2020_mae_clip_0_100": 15.24767046460925,
+      "test_2021_mae_clip_0_100": 15.199969085479593
+    },
+    "pred_range_test_no_clip": {
+      "min": -15.636086723517685,
+      "max": 31.357097696169706
+    }
+  },
+  "protocol_guardrails": {
+    "split": {
+      "type": "temporal",
+      "train": "<=2019",
+      "val": "2020",
+      "test": "2021"
+    },
+    "imputation": {
+      "type": "SimpleImputer",
+      "strategy": "median",
+      "fit_scope": "train_only"
+    },
+    "recency_weighting": {
+      "enabled": true,
+      "lambda": 0.05,
+      "current_year": 2021,
+      "age_definition": "age = clip(current_year - album_release_year, lower=0)"
+    },
+    "numeric_cols_15": [
+      "album_release_year",
+      "acousticness",
+      "danceability",
+      "duration_ms",
+      "energy",
+      "instrumentalness",
+      "key",
+      "liveness",
+      "loudness",
+      "mode",
+      "speechiness",
+      "tempo",
+      "time_signature",
+      "total_available_markets",
+      "valence"
+    ],
+    "nan_year_policy": "train"
+  },
+  "artifacts": {
+    "champion_joblib": "/mnt/c/Users/Daniel/OneDrive/Documentos/_Cursos/Outros/PopForecast/models/cycle_03/champion.joblib",
+    "champion_joblib_sha256": "16a96be63e16a1e0ac96195bb55023e7b54d04b05a4f2a2129b7661f04183af6",
+    "governance_config_path": "/mnt/c/Users/Daniel/OneDrive/Documentos/_Cursos/Outros/PopForecast/models/cycle_02/frozen_config_cycle2.json",
+    "governance_config_sha256": "8aaebe8581946b1fe8268f4b8ee5fecb8e6307487977a12b324b164d642f0045",
+    "baseline_audit_v3_path": "/mnt/c/Users/Daniel/OneDrive/Documentos/_Cursos/Outros/PopForecast/models/cycle_02/baseline_huber15_audit_v3_from_pack.json",
+    "baseline_audit_v3_sha256": "3915be4f9022e220d60ed24c4965906908b682eec3c130495858dc9891f50d12"
+  },
+  "environment": {
+    "python": "3.10.12 (main, Jan 27 2026, 14:38:09) [GCC 13.3.0]",
+    "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+    "numpy": "2.2.6",
+    "pandas": "2.3.3",
+    "sklearn": "1.7.2",
+    "xgboost": "3.1.3"
+  },
+  "summary": {
+    "baseline_beaten_any_no_clip": false,
+    "baseline_beaten_any_clip": false,
+    "best_candidate_no_clip": 15.254113425308288,
+    "best_candidate_clip": 15.303604679397173
+  }
+}
