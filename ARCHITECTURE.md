@@ -25,25 +25,25 @@
 The project follows a modified Hexagonal Architecture.
 
 .
-├── data/               # Local data storage (Ignored by Git)
-│   ├── raw/            # Original CSVs
-│   └── processed/      # Parquet files (Type-safe storage)
-├── models/             # Serialized models & configuration snapshots
-│   └── cycle_02/       # Artifacts specific to Cycle 2
-├── notebooks/          # Experimental & Storytelling
-│   └── [00-99]_*.ipynb # Numbered sequence (e.g., 01_eda, 02_baseline)
-├── src/                # Production Source Code
-│   ├── core/           # Domain Logic & ML Pipelines
+├── data/                     # Local data storage (Ignored by Git)
+│   ├── raw/                  # Original CSVs
+│   └── processed/            # Parquet files (Type-safe storage)
+├── models/                   # Serialized models & configuration snapshots
+│   └── cycle_02/             # Artifacts specific to Cycle 2
+├── notebooks/                # Experimental & Storytelling
+│   └── [00-99]_*.ipynb       # Numbered sequence (e.g., 01_eda, 02_baseline)
+├── src/                      # Production Source Code
+│   ├── core/                 # Domain Logic & ML Pipelines
 │   │   ├── preprocessing.py  # Cleaning pipelines (Sklearn)
 │   │   └── features.py       # Feature Engineering logic (Cycle 2+)
-│   ├── api/            # FastAPI Adapters
-│   ├── ui/             # Streamlit Application
-│   └── scripts/        # Automation (e.g., download_data.py)
-├── tests/              # Automated Tests (Pytest)
-├── poetry.lock         # Exact versions of dependencies
-├── pyproject.toml      # Project configuration
-├── WORKFLOW_SAPE.md    # Process & Methodology Guide
-└── ARCHITECTURE.md     # This file
+│   ├── api/                  # FastAPI Adapters
+│   ├── ui/                   # Streamlit Application
+│   └── scripts/              # Automation (e.g., download_data.py)
+├── tests/                    # Automated Tests (Pytest)
+├── poetry.lock               # Exact versions of dependencies
+├── pyproject.toml            # Project configuration
+├── WORKFLOW_SAPE.md          # Process & Methodology Guide
+└── ARCHITECTURE.md           # This file
 
 ## 5. DEVELOPMENT GUIDELINES (CONTRIBUTING)
 * **Language:** All code, docstrings, and variable names must be in **English**.
