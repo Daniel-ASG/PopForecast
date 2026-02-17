@@ -28,3 +28,4 @@ data/processed/*
 notebooks/.ipynb_checkpoints/
 tmp/
 .gitattributes
+docs_internal/
