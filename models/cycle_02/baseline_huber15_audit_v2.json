@@ -1,0 +1,120 @@
+{
+  "baseline_protocol": {
+    "name": "Baseline_Huber15_recency0p05_medfill",
+    "recency_lambda": 0.05,
+    "current_year": 2021,
+    "imputer": {
+      "strategy": "median",
+      "fit_scope": "train_only"
+    },
+    "numeric_cols_15": [
+      "album_release_year",
+      "acousticness",
+      "danceability",
+      "duration_ms",
+      "energy",
+      "instrumentalness",
+      "key",
+      "liveness",
+      "loudness",
+      "mode",
+      "speechiness",
+      "tempo",
+      "time_signature",
+      "total_available_markets",
+      "valence"
+    ],
+    "hash_spec": {
+      "array_hash": "sha256(shape + dtype + tobytes(C))",
+      "df_values_hash": "sha256(values only)",
+      "df_schema_hash": "sha256(colnames + dtypes + values)",
+      "index_hash": "sha256(index values)",
+      "stage": [
+        "pre_impute",
+        "post_impute"
+      ]
+    }
+  },
+  "dataset_fingerprint_in_memory": {
+    "train_split": {
+      "rows": 378797,
+      "cols": 16,
+      "index_hash": "ba80410aa26cf1488480c880c204592edf1236c7d3085a3bd6e7fba351af3e69",
+      "head_hash_first_20k": "f440d5b19ed7eb0c258b158e5dd9787d5167ab0d1a27f03126b77404f1e2bdb0",
+      "head_cols_used": [
+        "album_release_year"
+      ]
+    },
+    "val_split": {
+      "rows": 184460,
+      "cols": 16,
+      "index_hash": "0ea44270031a3e2e092d3e71764a217cee7d6e8096857153a13c3872281d13d8",
+      "head_hash_first_20k": "d73d44706f5e319a05674430530d17901674229a4da9666d850e95f54f00bd9e",
+      "head_cols_used": [
+        "album_release_year"
+      ]
+    },
+    "test_split": {
+      "rows": 96980,
+      "cols": 16,
+      "index_hash": "cbbec9bf4f5b758f8522887eb4456d79f5905cd23772b750095439a737e545f4",
+      "head_hash_first_20k": "32e857647245e37ce5dd50a5a6323d008e38efb1699a030ba362a75ae679381d",
+      "head_cols_used": [
+        "album_release_year"
+      ]
+    }
+  },
+  "hashes": {
+    "pre_impute": {
+      "X_train_values": "ec0dbb46a50a184cd5f858a8d0cf25e3082df7b96fd7c3e49aca8290c1dc9748",
+      "X_train_schema": "2cac3adf3373f0c2b47af0a7714c304f19d2416695adde39ce579213a580c960",
+      "X_val_values": "31d01ce1cb3746c6eed752145cbc5a96e9dfb151d8e21063c211fea4d8a1f12d",
+      "X_val_schema": "d006dcb18b829fc6552379e15477209ab94d4242e8cf3ab56596ff0cc66ae15c",
+      "X_test_values": "5a0e0de46f7c923f3741cc5484ea5381ecb04652e552c2dcbb7a89ab610ecac0",
+      "X_test_schema": "cce1dc6197473e7ab151d762f84d8b2f821bb87fd063340abde7367de7cdd71e",
+      "idx_train": "efa5fc8c1a9f853239817c9c40bf2caef6e8647819271f31beb56999d568a8c3",
+      "idx_val": "d808e6cc26475df0c5e663f0122335eec04d7dc805672e0bf6fdde51ec519e5c",
+      "idx_test": "6f79a0e69f31d6452fb3b66907a35c6bffb8193d97a7df5117382f6a96855159",
+      "y_train": "6a8e18ead264f8bb66b82527022efe1c6490a12ff7b8f990e4245fee3e7d15d9",
+      "y_val": "c2f1c6c829b3d97af67875cc96543eda671a6d76917bc7ce2e9af31e4be048dd",
+      "y_test": "8a6fdc4009d94437f1a4b80e8d782400a9696ef33d91c4357f671491f651fe72"
+    },
+    "post_impute": {
+      "X_train_imputed": "04d4b6da214a63ee51a2aaddb2828ebeda3c3c41d85211f5be21b49ec6d449e7",
+      "X_val_imputed": "ebfdf0501869c9e566c24a2632245068c41050a1ad3f6a3082dc4c1855db2bd4",
+      "X_test_imputed": "6fc916040e919073bb408cb4b0b8e0eff0b2c9339cba3724991e7daf741fcd09"
+    },
+    "weights": {
+      "w_train": "dfed8b30de5410e1e0a4d790dc67bdf4420cf0cb9354b31f92ce9ab309d62415"
+    }
+  },
+  "shapes": {
+    "X_train": [
+      283488,
+      15
+    ],
+    "X_val": [
+      105605,
+      15
+    ],
+    "X_test": [
+      50772,
+      15
+    ],
+    "X_train_imputed": [
+      283488,
+      15
+    ],
+    "X_val_imputed": [
+      105605,
+      15
+    ],
+    "X_test_imputed": [
+      50772,
+      15
+    ],
+    "y_train": 283488,
+    "y_val": 105605,
+    "y_test": 50772
+  }
+}

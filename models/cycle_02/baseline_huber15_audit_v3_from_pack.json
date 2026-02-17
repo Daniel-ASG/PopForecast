@@ -1,0 +1,103 @@
+{
+  "baseline_protocol": {
+    "name": "Baseline_Huber15_recency0p05_medfill",
+    "numeric_cols_15": [
+      "album_release_year",
+      "acousticness",
+      "danceability",
+      "duration_ms",
+      "energy",
+      "instrumentalness",
+      "key",
+      "liveness",
+      "loudness",
+      "mode",
+      "speechiness",
+      "tempo",
+      "time_signature",
+      "total_available_markets",
+      "valence"
+    ],
+    "recency_lambda": 0.05,
+    "current_year": 2021,
+    "imputer": {
+      "strategy": "median",
+      "fit_scope": "train_only"
+    },
+    "hash_spec_single": "sha256(shape + dtype + tobytes(order='C')) applied to ALL arrays in the pack"
+  },
+  "pack_npz_sha256": "0de188ce97b50b507ff47cd65a238d41154a9efb5a3e8512f4dd98a8e6dc59c3",
+  "shapes": {
+    "X_train_imputed": [
+      283488,
+      15
+    ],
+    "X_val_imputed": [
+      105605,
+      15
+    ],
+    "X_test_imputed": [
+      50772,
+      15
+    ],
+    "y_train": [
+      283488
+    ],
+    "y_val": [
+      105605
+    ],
+    "y_test": [
+      50772
+    ],
+    "w_train": [
+      283488
+    ],
+    "idx_train": [
+      283488
+    ],
+    "idx_val": [
+      105605
+    ],
+    "idx_test": [
+      50772
+    ],
+    "cols": [
+      15
+    ],
+    "imputer_statistics_": [
+      15
+    ]
+  },
+  "dtypes": {
+    "X_train_imputed": "float64",
+    "X_val_imputed": "float64",
+    "X_test_imputed": "float64",
+    "y_train": "float64",
+    "y_val": "float64",
+    "y_test": "float64",
+    "w_train": "float64",
+    "idx_train": "int64",
+    "idx_val": "int64",
+    "idx_test": "int64",
+    "cols": "object",
+    "imputer_statistics_": "float64"
+  },
+  "hashes_from_pack_only": {
+    "X_train_imputed": "04d4b6da214a63ee51a2aaddb2828ebeda3c3c41d85211f5be21b49ec6d449e7",
+    "X_val_imputed": "ebfdf0501869c9e566c24a2632245068c41050a1ad3f6a3082dc4c1855db2bd4",
+    "X_test_imputed": "6fc916040e919073bb408cb4b0b8e0eff0b2c9339cba3724991e7daf741fcd09",
+    "y_train": "6a8e18ead264f8bb66b82527022efe1c6490a12ff7b8f990e4245fee3e7d15d9",
+    "y_val": "c2f1c6c829b3d97af67875cc96543eda671a6d76917bc7ce2e9af31e4be048dd",
+    "y_test": "8a6fdc4009d94437f1a4b80e8d782400a9696ef33d91c4357f671491f651fe72",
+    "w_train": "dfed8b30de5410e1e0a4d790dc67bdf4420cf0cb9354b31f92ce9ab309d62415",
+    "idx_train": "7e5d9bc2c1eef9cce120a5b3dbf7ef0ebdae50e33d5aa1fb91195d761434826f",
+    "idx_val": "8d9afa082887c208bf94d50afe35f13b543e7b6fadd4702bed61cae79e71ee73",
+    "idx_test": "72b56d8739b84018aaab1b23b99eac65ef26f78207adb57feb9e6f2db96ef469",
+    "cols": "01664009c6d42197772c5c190e1726feddf13af352cec943e9523e287dd725c8",
+    "imputer_statistics_": "63ce29f1d90e1ae41068cb4e43db114bfb8bfb16d7ebb07a74691ba8a1903d05"
+  },
+  "notes": [
+    "This audit is authoritative because it is derived only from the NPZ pack arrays.",
+    "Notebook 04 should validate by loading the NPZ, recomputing hashes with the same spec, and comparing to this JSON."
+  ]
+}
