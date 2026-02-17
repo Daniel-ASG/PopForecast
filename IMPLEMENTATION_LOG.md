@@ -470,6 +470,37 @@ We tested the hypothesis that a **Two‑Stage Hurdle Model (Classifier + Regress
 * **Criterion:** If no candidate beats the baseline on **Test 2021 (Generalization)**, keep Huber as the champion.
 * **Hypothesis:** Gradient Boosting with robust loss (Pseudo-Huber/MAE) should capture non-linearities while ignoring the 2021 outliers.
 
+```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#ffffff', 'primaryTextColor': '#000000', 'primaryBorderColor': '#333333', 'lineColor': '#333333', 'tertiaryColor': '#ffffff'}}}%%
+flowchart LR
+    A["Same protocol for everyone"] --> B["Compare Models"]
+    B --> C["Validation (2020)<br/>(The 'Look Good' Trap)"]
+    B --> D["Test (2021)<br/>(The 'Reality Check' / Drift)"]
+
+    C --> XGB["XGBoost: very low Val MAE<br/>(Learns 2020 noise)"]
+    D --> XGBT["High Test MAE in 2021<br/>(Fails on Drift)"]
+
+    C --> HUB["Huber-15: Val MAE higher<br/>(Conservative fit)"]
+    D --> HUBT["Best Test MAE in 2021<br/>(Robustness pays off)"]
+
+    XGB --> E["Reason: Complexity → Overfits 2020 specifics"]
+    E --> XGBT
+
+    HUB --> F["Reason: Robust loss + Simplicity<br/>→ Ignores outliers"]
+    F --> HUBT
+
+    XGBT --> G["Champion Rule:<br/>Generalization (Test 2021) is King"]
+    HUBT --> G
+
+    G --> WIN["Winner: Huber-15<br/>(Proven Stability)"]
+
+    classDef win fill:#dff7df,stroke:#2e7d32,stroke-width:2px,color:#004d40;
+    classDef lose fill:#ffebee,stroke:#c62828,stroke-width:1px,color:#b71c1c;
+    classDef default fill:#ffffff,stroke:#333333,stroke-width:1px,color:#000000;
+    class WIN,HUBT win;
+    class XGBT lose;
+```
+
 ### 2. Protocol Guardrails (Invariant)
 All models were evaluated under strict constraints to ensure fair comparison:
 * **Decision Split:** Train ≤2019, Val=2020, Test=2021.
@@ -516,4 +547,5 @@ We attempted a manual refit with early stopping to verify if the fixed `n_estima
 ### 6. Artifacts Persisted
 * **Champion Model:** `models/cycle_03/champion.joblib` (HuberRegressor).
     * SHA256: `16a96be63e16a1e0ac96195bb55023e7b54d04b05a4f2a2129b7661f04183af6`
+
 * **Metadata:** `models/cycle_03/run_metadata_cycle3.json` (Contains all metrics and environment versions).
