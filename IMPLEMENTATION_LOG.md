@@ -380,26 +380,140 @@ Recommended commit structure:
 * **Verdict:** The infrastructure is solid, data is clean, and there is a learnable signal (RF > Dummy).
 * **Next Step (Cycle 2):** Focus on **Feature Engineering** to capture temporal context (Age, Seasonality) and Audio Interactions, as the baseline suggests simple features are not enough.
 
+
+
+
 ## 📅 CYCLE 02 — ADVANCED FEATURE ENGINEERING & ROBUST BASELINE
 
 ### 1. Feature Engineering Pipeline (Finalized)
-* **New Blocks Implemented:** `audio_interactions` (interactions between user/item features), `non_linear` (polynomials), `market` (regional stats), and `temporal`.
-* **Leakage Prevention:** Removed `year_meta` (aggregate stats per year) as it proved risky for temporal splits.
-* **Weighting:** Fixed `recency_lambda = 0.05` (conservative setting) after testing showed higher values degraded test generalization.
+* **New Blocks Implemented:** `audio_interactions`, `non_linear`, `market`, and `temporal`.
+* **Leakage Prevention:** `year_meta` remains disabled under temporal evaluation due to target‑proxy risk.
+* **Recency Weighting:** `lambda = 0.05` selected after a sweep — higher values improved 2020 but degraded 2021.
+* **Tracks Explored:**
+  - **numeric_only_15** (15 raw numeric columns + median fill + recency weights)
+  - **engineered_38** (expanded feature space kept for exploration only)
 
-### 2. The "Hurdle" Experiment (Architecture & Failure)
-We tested the hypothesis that a Two-Stage Hurdle Model (Classifier + Regressor) would best handle the zero-inflation and concept drift observed in 2021.
-* **The "Collapse" Issue:** Unconstrained optimization drove the classification threshold to >0.90, effectively ignoring the classifier.
-* **Benchmarking (Test Set 2021):**
-    * ❌ **Hurdle Model:** MAE ~16.14 (Complex architecture struggled with error propagation).
-    * ✅ **HuberRegressor:** MAE ~15.21 (Winner). Its robust loss function successfully ignored the 2021 outliers.
-    * ✅ **RandomForest (Small):** MAE ~15.36. Better than Hurdle, confirming that regularization is key.
+---
 
-### 3. Artifacts Frozen
-* **Config:** `models/cycle_02/frozen_config_cycle2.json` (Contains the finalized feature set, split protocols, and the pivot decision).
-* **Notebook:** `notebooks/03_feature_engineering.ipynb` (Refactored to document the robust baseline finding).
+### 2. Baseline Track Decision (Frozen for Cycle 3)
+* **Official Track for Cycle 3:** `numeric_only_15`
+* **Protocol Name:** `Baseline_Huber15_recency0p05_medfill`
+* **Champion Reference (temporal split):**
+  - **HuberRegressor:** MAE(2021) = **15.2127**
+* **Engineered Track:** retained for research in Cycle 2 but **paused for Cycle 3** to avoid mixing input spaces.
 
-### 4. Next Steps (Strategic Pivot for Cycle 3)
-* **Decision:** The Hurdle architecture is **deprecated**. We will not freeze a threshold for it.
-* **New Objective:** Combine the **non-linearity** of Trees with the **robustness** of the Huber Loss.
-* **Action:** Cycle 3 will implement **Gradient Boosting (XGBoost/LGBM)** configured specifically with Robust Objective Functions (Huber/Quantile) to synthesize the strengths of the top two performers.
+---
+
+### 3. The "Hurdle" Experiment (Architecture, Failure & Interpretation)
+We tested the hypothesis that a **Two‑Stage Hurdle Model (Classifier + Regressor)** would better handle zero‑inflation and the 2021 concept drift.
+
+**What actually happened:**
+
+* **Collapse Issue:**  
+  MAE‑driven threshold optimization pushed the classifier threshold extremely high (≈0.50–0.90), effectively **disabling zero prediction** (`pred_zero_pct ≈ 0%`).  
+  This nullified the classifier stage and amplified error propagation.
+
+* **Benchmarking on Test Set 2021:**
+  - ❌ **Hurdle Model:** MAE ~**16.14** (complex architecture, strong error propagation)
+  - ✅ **HuberRegressor:** MAE ~**15.21** (robust loss successfully ignored 2021 outliers)
+  - ✅ **RandomForest (small):** MAE ~**15.36** (outperformed Hurdle; regularization > complexity)
+
+* **Status:**  
+  The Hurdle model is kept **for reference only** and **does not continue into Cycle 3**.
+
+---
+
+### 4. Artifacts Frozen (Reproducibility & Auditability)
+
+* **Deterministic Baseline Pack (Portable Anchor):**  
+  `models/cycle_02/baseline_huber15_pack.npz`  
+  → single-source-of-truth for `Baseline_Huber15_recency0p05_medfill`  
+  → includes median‑imputed X_*, split indices, y_*, and train weights  
+  → enables deterministic reproduction of MAE(2021)=15.2127 in Notebook 04, independent of upstream dataset regeneration.
+ 
+* **Audit v3 (Derived from Pack):**  
+  `models/cycle_02/baseline_huber15_audit_v3_from_pack.json`  
+  → hashes computed directly from the NPZ pack arrays using an explicit and uniform hash spec  
+  → authoritative forensic anchor for the baseline  
+  → replaces all prior audits for reproducibility purposes  
+  → ensures deterministic validation of the baseline by recomputing hashes from the pack in Notebook 04
+
+
+* **Note:**  
+  `baseline_huber15_audit_v2.json` remains in the repository as a historical dataset‑level audit, but it is **not** used for baseline reproduction and is **not** part of the frozen artifacts for Cycle 3.
+
+---
+
+### 5. Next Steps (Strategic Pivot for Cycle 3)
+* **Decision:**  
+  The Hurdle architecture is **deprecated** — no threshold will be frozen.
+
+* **New Objective:**  
+  Combine:
+  - the **non‑linearity** of tree‑based models  
+  - the **robustness** of Huber/MAE losses  
+
+* **Direction for Cycle 3:**  
+  Implement **Gradient Boosting (XGBoost)** with **robust objective functions** (`absoluteerror`, `pseudohubererror`) using the **same input space** as `Baseline_Huber15_recency0p05_medfill`.
+
+* **Rule:**  
+  Never report “15.21” without the protocol qualifier.
+
+
+
+
+
+## 📅 CYCLE 03 — ROBUST MODELING & CHAMPION SELECTION (XGBoost vs. Huber)
+
+### 1. Goal & Strategy
+* **Objective:** Attempt to beat the frozen **Huber-15** baseline under the **same protocol guardrails** using robust XGBoost objectives.
+* **Criterion:** If no candidate beats the baseline on **Test 2021 (Generalization)**, keep Huber as the champion.
+* **Hypothesis:** Gradient Boosting with robust loss (Pseudo-Huber/MAE) should capture non-linearities while ignoring the 2021 outliers.
+
+### 2. Protocol Guardrails (Invariant)
+All models were evaluated under strict constraints to ensure fair comparison:
+* **Decision Split:** Train ≤2019, Val=2020, Test=2021.
+* **Input Space:** Frozen list of **15 numeric columns** (no new features).
+* **Preprocessing:** Median imputation (fit on train only).
+* **Weights:** Recency weighting (λ=0.05) applied to train only.
+
+### 3. Baseline Reproduction (Verification)
+We first re-ran the Cycle 2 winner to establish the "Beat to Win" score.
+* **HuberRegressor (No-Clip):**
+    * Val 2020 MAE: **15.2613**
+    * Test 2021 MAE: **15.2127** (The target to beat)
+* **HuberRegressor (Clipped 0-100):**
+    * Test 2021 MAE: **15.2000** (Reference for post-processing)
+
+### 4. Challenger Search (XGBoost Experiments)
+We tested multiple configurations of XGBoost using `xgboost==3.1.3`.
+
+#### 4.1 Point Runs (Naive)
+* `reg:squarederror` (MSE) → Test 2021 MAE ≈ **15.58** (Failed: Sensitive to outliers)
+* `reg:absoluteerror` (MAE) → Test 2021 MAE ≈ **15.70**
+* `reg:pseudohubererror` → Test 2021 MAE ≈ **15.88** (Unstable without tuning)
+
+#### 4.2 Tuned Runs (Optimized on Val 2020)
+Used `RandomizedSearchCV` with `PredefinedSplit` (Train vs Val 2020) and fixed `n_estimators`.
+* Best Candidate (Pseudo-Huber): Test 2021 MAE ≈ **15.3044**
+* **Result:** Improved over naive runs, but still **+0.09 worse** than baseline.
+
+#### 4.3 Expanded Tuning (Regularization)
+Added `reg_alpha`, `reg_lambda`, `gamma` to control overfitting.
+* Best Candidate (MAE Loss): Test 2021 MAE (clipped) ≈ **15.2541**
+* **Result:** Closer, but still unable to beat the simple Huber model (15.2000).
+
+#### 4.4 Exploratory Check: Early Stopping
+We attempted a manual refit with early stopping to verify if the fixed `n_estimators` was suboptimal.
+* **Observation:** The model found a `best_iteration` of **678** and achieved a Test 2021 MAE (clip) of **15.3997**.
+* **Decision:** This result confirmed that even with optimal stopping, XGBoost could not beat the Huber baseline (15.20).
+* **Protocol Note:** This run was excluded from the official ranking table to maintain a consistent `RandomizedSearchCV` protocol across all candidates, avoiding API incompatibilities with the wrapper.
+
+### 5. Verdict & Outcome
+* **Observation:** XGBoost variants consistently outperformed Huber on **Val 2020** (MAE ~14.12 vs 15.26), proving they could learn the pre-drift patterns better. However, they failed to generalize to the **Test 2021** drift scenario.
+* **Decision:** **Huber-15** remains the Champion. Stability is prioritized over validation performance.
+
+### 6. Artifacts Persisted
+* **Champion Model:** `models/cycle_03/champion.joblib` (HuberRegressor).
+    * SHA256: `16a96be63e16a1e0ac96195bb55023e7b54d04b05a4f2a2129b7661f04183af6`
+* **Metadata:** `models/cycle_03/run_metadata_cycle3.json` (Contains all metrics and environment versions).
