@@ -24,6 +24,7 @@
 ## 4. DIRECTORY STRUCTURE
 The project follows a modified Hexagonal Architecture.
 
+```
 .
 ├── data/                     # Local data storage (Ignored by Git)
 │   ├── raw/                  # Original CSVs
@@ -44,9 +45,11 @@ The project follows a modified Hexagonal Architecture.
 ├── pyproject.toml            # Project configuration
 ├── WORKFLOW_SAPE.md          # Process & Methodology Guide
 └── ARCHITECTURE.md           # This file
+```
 
 ## 5. DEVELOPMENT GUIDELINES (CONTRIBUTING)
 * **Language:** All code, docstrings, and variable names must be in **English**.
 * **Typing:** Python Type Hints are mandatory for all function signatures.
 * **Notebooks:** Restricted to `/notebooks`. No production logic (.py) should live here.
+
 * **Testing:** All core logic must be covered by unit tests.
