@@ -541,7 +541,17 @@ We attempted a manual refit with early stopping to verify if the fixed `n_estima
 * **Protocol Note:** This run was excluded from the official ranking table to maintain a consistent `RandomizedSearchCV` protocol across all candidates, avoiding API incompatibilities with the wrapper.
 
 ### 5. Verdict & Outcome
-* **Observation:** XGBoost variants consistently outperformed Huber on **Val 2020** (MAE ~14.12 vs 15.26), proving they could learn the pre-drift patterns better. However, they failed to generalize to the **Test 2021** drift scenario.
+
+To finalize the decision, we summarized the best representative from each strategy tested:
+
+| Strategy | Model Tag | Val 2020 (MAE) | Test 2021 (MAE) | Verdict |
+| :--- | :--- | :--- | :--- | :--- |
+| **Baseline** | `HuberRegressor` (Linear) | 15.26 | **15.21** | 👑 **Champion** (Most Stable) |
+| **Regularized XGB** | `xgb_expanded_mae` | **14.12** | 15.25 | **Best Challenger** (Closest, but complex) |
+| **Tuned XGB** | `xgb_tuned_pseudohuber` | 14.14 | 15.30 | **Overfit** (Great on Val, lost on Test) |
+| **Naive XGB** | `xgb_point_squarederror` | 14.40 | 15.58 | **Failed** (Sensitive to outliers) |
+
+* **Observation:** XGBoost variants consistently outperformed Huber on **Val 2020** (MAE ~14.12 vs 15.26), proving they could learn the pre-drift patterns better. However, they failed to generalize to the **Test 2021** drift scenario (gap of ~1.15 points vs baseline's -0.05).
 * **Decision:** **Huber-15** remains the Champion. Stability is prioritized over validation performance.
 
 ### 6. Artifacts Persisted
@@ -549,3 +559,4 @@ We attempted a manual refit with early stopping to verify if the fixed `n_estima
     * SHA256: `16a96be63e16a1e0ac96195bb55023e7b54d04b05a4f2a2129b7661f04183af6`
 
 * **Metadata:** `models/cycle_03/run_metadata_cycle3.json` (Contains all metrics and environment versions).
+
