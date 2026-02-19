@@ -29,3 +29,4 @@ notebooks/.ipynb_checkpoints/
 tmp/
 .gitattributes
 docs_internal/
+models/cycle_03/champion.json
