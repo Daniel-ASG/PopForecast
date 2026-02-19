@@ -1,150 +1,156 @@
-import numpy as np
-import pandas as pd
-from sklearn.linear_model import HuberRegressor
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_absolute_error
-from pathlib import Path
+import json
 import joblib
+import hashlib
+import time
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from sklearn.metrics import mean_absolute_error
+from sklearn.impute import SimpleImputer
+import xgboost as xgb
 
-# --- CONFIGURATION (FROZEN PROTOCOL) ---
-# Paths
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-# Assumes the filename mirrors the raw one but with .parquet extension
-DATA_PATH = BASE_DIR / "data" / "processed" / "spotify_tracks_modeling.parquet"
-MODEL_DIR = BASE_DIR / "models" / "cycle_03"
-MODEL_PATH = MODEL_DIR / "champion.joblib"
+# ==========================================
+# CONFIGURATION & PATHS
+# ==========================================
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Nome do arquivo corrigido conforme apontamento
+DATA_PATH = PROJECT_ROOT / "data" / "processed" / "spotify_tracks_modeling.parquet"
+ARTIFACT_DIR = PROJECT_ROOT / "models" / "cycle_03"
+ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- FEATURES (STRICTLY FROM CYCLE 2 FROZEN CONFIG) ---
-# Total: 15 numeric features
-NUMERIC_FEATURES = [
-    "album_release_year",
-    "acousticness",
-    "danceability",
-    "duration_ms",
-    "energy",
-    "instrumentalness",
-    "key",
-    "liveness",
-    "loudness",
-    "mode",
-    "speechiness",
-    "tempo",
-    "time_signature",
-    "total_available_markets",
-    "valence"
+FEATURES = [
+    'duration_ms', 'song_explicit', 'danceability', 'energy', 'key', 'loudness',
+    'mode', 'speechiness', 'acousticness', 'instrumentalness', 'liveness',
+    'valence', 'tempo', 'time_signature', 'total_available_markets'
 ]
+TARGET = 'song_popularity'
 
-TARGET = "song_popularity"
-# Note: 'album_release_year' is both a feature AND the splitting criteria
-YEAR_COL = "album_release_year"
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
+def compute_recency_weights(years: pd.Series, ref_year: int, lambda_param: float = 0.05) -> np.ndarray:
+    """Computes exponential decay weights based on album release year."""
+    age = np.maximum(0, ref_year - years)
+    return np.exp(-lambda_param * age).values
 
-# Frozen Hyperparameters
-RECENCY_LAMBDA = 0.05
-REF_YEAR = 2021
-SPLIT_TRAIN_CUTOFF = 2019
-SPLIT_TEST_YEAR = 2021
+def generate_sha256(filepath: Path) -> str:
+    """Generates a SHA256 checksum for a given file."""
+    sha256_hash = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for byte_block in iter(lambda: f.read(4096), b""):
+            sha256_hash.update(byte_block)
+    return sha256_hash.hexdigest()
 
-def load_data(path):
-    """
-    Loads pre-processed Parquet data.
-    Enforces the strictly frozen feature set from Cycle 2.
-    """
-    print(f"📥 Loading processed data from: {path}")
-    
-    if not path.exists():
-        raise FileNotFoundError(f"❌ Parquet file not found at: {path}")
-
-    df = pd.read_parquet(path)
-    
-    # Validation: Ensure all 15 frozen features + target are present
-    # We don't need to add YEAR_COL separately here because it is already inside NUMERIC_FEATURES
-    cols_to_keep = list(set(NUMERIC_FEATURES + [TARGET])) 
-    
-    existing_cols = [c for c in cols_to_keep if c in df.columns]
-    
-    if len(existing_cols) < len(cols_to_keep):
-        missing = set(cols_to_keep) - set(existing_cols)
-        raise ValueError(f"❌ CRITICAL: Dataset is missing frozen features: {missing}")
-    
-    return df
-
-def get_temporal_split(df):
-    """
-    Applies the strict Cycle 3 temporal split.
-    Train: Years <= 2019 (including NaNs)
-    Test: Year == 2021
-    """
-    # Uses the year column for splitting
-    # Note: We access the series directly, handling potential NaNs
-    years = df[YEAR_COL]
-    
-    train_mask = (years <= SPLIT_TRAIN_CUTOFF) | (years.isna())
-    test_mask = (years == SPLIT_TEST_YEAR)
-    
-    return df[train_mask].copy(), df[test_mask].copy()
-
-def calculate_sample_weights(df):
-    """
-    Calculates recency weights: w = exp(-lambda * (2021 - year))
-    NaN years receive weight 1.0 (neutral).
-    """
-    years = df[YEAR_COL]
-    
-    # Calculate weights based on decay
-    weights = np.exp(-RECENCY_LAMBDA * (REF_YEAR - years))
-    
-    # Fill NaN weights with 1.0
-    return weights.fillna(1.0)
-
-def train():
-    # 1. Preparation
-    df = load_data(DATA_PATH)
-    train_df, test_df = get_temporal_split(df)
-    
-    print(f"📊 Split created: Train={len(train_df)}, Test={len(test_df)}")
-    
-    # Select strictly the features defined in frozen config
-    X_train = train_df[NUMERIC_FEATURES]
-    y_train = train_df[TARGET]
-    
-    X_test = test_df[NUMERIC_FEATURES]
-    y_test = test_df[TARGET]
-    
-    # 2. Weights (Train only)
-    sample_weights = calculate_sample_weights(train_df)
-    print(f"⚖️ Weights calculated (Min: {sample_weights.min():.4f}, Max: {sample_weights.max():.4f})")
-
-    # 3. Pipeline (Median Imputer + Huber Regressor)
-    # Note: Imputer will handle NaNs in 'album_release_year' and other features
-    pipeline = Pipeline([
-        ('imputer', SimpleImputer(strategy='median')),
-        ('regressor', HuberRegressor(epsilon=1.35, max_iter=1000)) 
-    ])
-    
-    # 4. Training
-    print("🚀 Training HuberRegressor...")
-    pipeline.fit(X_train, y_train, regressor__sample_weight=sample_weights)
-    
-    # 5. Evaluation (Reproduction Check)
-    y_pred = pipeline.predict(X_test)
-    
-    # Optional Clip (for visual metric only)
-    y_pred_clipped = np.clip(y_pred, 0, 100)
-    
-    mae = mean_absolute_error(y_test, y_pred)
-    mae_clip = mean_absolute_error(y_test, y_pred_clipped)
-    
-    print("\n" + "="*40)
-    print(f"🏆 REPRODUCTION RESULTS (TEST 2021)")
-    print("="*40)
-    print(f"MAE (Raw)      : {mae:.4f}  (Expected: ~15.2127)")
-    print(f"MAE (Clipped)  : {mae_clip:.4f}  (Expected: ~15.2000)")
-    
-    # 6. Serialization
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    joblib.dump(pipeline, MODEL_PATH)
-    print(f"\n💾 Model saved to: {MODEL_PATH}")
-
+# ==========================================
+# MAIN EXECUTION
+# ==========================================
 if __name__ == "__main__":
-    train()
+    total_start_time = time.time()
+    print("🚀 Starting PopForecast Cycle 03 Training Pipeline (Operational Refit)...")
+
+    # 1. Load Data
+    step_start = time.time()
+    print(f"\n📦 Loading dataset from {DATA_PATH.name}...")
+    df = pd.read_parquet(DATA_PATH)
+    print(f"   ⏱️ Done in {time.time() - step_start:.2f}s")
+
+    # 2. Phase 2 Splits: Operational Refit
+    train_mask = df['album_release_year'] <= 2020
+    test_mask = df['album_release_year'] == 2021
+
+    X_train = df.loc[train_mask, FEATURES]
+    y_train = df.loc[train_mask, TARGET]
+    
+    X_test = df.loc[test_mask, FEATURES]
+    y_test = df.loc[test_mask, TARGET]
+
+    print(f"📊 Split sizes -> Train: {X_train.shape[0]} | Test: {X_test.shape[0]}")
+
+    # 3. Compute Sample Weights
+    print("\n⚖️ Computing recency weights (lambda=0.05, ref_year=2020)...")
+    sample_weights = compute_recency_weights(
+        df.loc[train_mask, 'album_release_year'], 
+        ref_year=2020, 
+        lambda_param=0.05
+    )
+
+    # 4. Pipeline Setup & Training
+    print("\n🧠 Initializing High-Capacity XGBoost Pipeline...")
+    imputer = SimpleImputer(strategy='median')
+    X_train_imputed = imputer.fit_transform(X_train)
+    X_test_imputed = imputer.transform(X_test)
+
+    model = xgb.XGBRegressor(
+        n_estimators=1648,
+        max_depth=12,
+        learning_rate=0.01,
+        objective='reg:absoluteerror',
+        random_state=42,
+        n_jobs=-1
+    )
+
+    print("⏳ Fitting model (this will take a few minutes)...")
+    fit_start = time.time()
+    model.fit(X_train_imputed, y_train, sample_weight=sample_weights)
+    print(f"   ⏱️ Training completed in {time.time() - fit_start:.2f}s")
+
+    # 5. Evaluation
+    print("\n📈 Evaluating on Test Set (2021 Drift)...")
+    preds_raw = model.predict(X_test_imputed)
+    preds_clipped = np.clip(preds_raw, 0, 100)
+
+    mae_raw = mean_absolute_error(y_test, preds_raw)
+    mae_clipped = mean_absolute_error(y_test, preds_clipped)
+
+    print(f"🏆 Test MAE (No-Clip): {mae_raw:.4f}")
+    print(f"🏆 Test MAE (Clipped): {mae_clipped:.4f}")
+
+    # 6. Export Artifacts
+    print("\n💾 Saving artifacts...")
+    model_path = ARTIFACT_DIR / "champion.json"
+    imputer_path = ARTIFACT_DIR / "imputer.joblib"
+    
+    model.save_model(model_path)
+    joblib.dump(imputer, imputer_path)
+
+    # 7. Metadata
+    metadata = {
+        "cycle": "03",
+        "evaluation_context": "Operational Refit - Strategy evolved to address 2021 temporal drift",
+        "champion": {
+            "model_type": "XGBRegressor",
+            "features": FEATURES,
+            "hyperparameters": {
+                "n_estimators": 1648,
+                "max_depth": 12,
+                "learning_rate": 0.01,
+                "objective": "reg:absoluteerror"
+            }
+        },
+        "preprocessing": {
+            "imputation": "median (train-only)",
+            "sample_weights": "exponential_decay",
+            "lambda": 0.05,
+            "ref_year": 2020
+        },
+        "evaluation": {
+            "test_split": "album_release_year == 2021",
+            "metrics": {
+                "test_mae_raw": round(mae_raw, 4),
+                "test_mae_clipped": round(mae_clipped, 4)
+            }
+        },
+        "audit_hashes": {
+            "champion.json_sha256": generate_sha256(model_path),
+            "imputer.joblib_sha256": generate_sha256(imputer_path)
+        }
+    }
+
+    metadata_path = ARTIFACT_DIR / "run_metadata_cycle3.json"
+    with open(metadata_path, "w") as f:
+        json.dump(metadata, f, indent=4)
+
+    total_elapsed = time.time() - total_start_time
+    mins, secs = divmod(total_elapsed, 60)
+    print(f"\n✅ Run complete! Platinum metadata saved to {metadata_path.name}")
+    print(f"🏁 Total Pipeline Execution Time: {int(mins)}m {secs:.2f}s")
