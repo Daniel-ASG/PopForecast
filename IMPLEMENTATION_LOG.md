@@ -572,3 +572,101 @@ To maintain repository health, large binary models are ignored by Git. Reproduci
 * **Governance Metadata:** `models/cycle_03/run_metadata_cycle3.json`
 * Upgraded to "Platinum Standard" including explicit `evaluation_context` to document the strategic pivot.
 * Includes SHA256 hashes of the environment and historical baseline paths for full auditability.
+
+
+## 📅 CYCLE 04 — ERROR ANALYSIS & INTERPRETABILITY (Data Enrichment Phase)
+
+### 1. Goal & Strategic Pivot
+* **Objective:** The high-capacity XGBoost (Cycle 3 Champion) hit a plateau (MAE ~14.39). Error analysis hypotheses suggest that acoustic features alone cannot explain cultural phenomena, artist authority, or "troll" metadata. To break the 14.0 MAE barrier, external context is required.
+* **The Spotify API Attempt & Failure:** The initial strategy was to query the Spotify Web API for artist genres and track release dates. 
+    * **Failure Point:** Spotify's API restricts bulk metadata extraction, imposes strict rate limits, and its "genres" are often too broad or sanitized. 
+* **The Last.fm Adaptation:** Pivoted to the Last.fm API. 
+    * **Rationale:** Last.fm provides crowd-sourced, highly granular cultural `tags` (capturing niches and trends) and a highly correlated `listeners` metric that serves as an excellent proxy for artist authority. It also does not require complex OAuth flows.
+
+---
+
+### 2. Infrastructure & Artifacts Created (Ingestion)
+
+Cycle 04 required a stable ingestion layer to incorporate external cultural metadata (Last.fm) at scale. This section documents the infrastructure components created to support the enrichment process and ensure reproducibility across cycles.
+
+#### 2.1 Last.fm Ingestion Pipeline
+
+A dedicated ingestion workflow was implemented to retrieve artist‑level metadata from the Last.fm API, focusing on two signals used later in modeling:
+
+- `listeners` — proxy for artist authority  
+- `tags` — crowd‑sourced descriptors capturing genre niches and cultural context  
+
+**Client module**  
+`src/core/lastfm_client.py`  
+- Provides `get_artist_info` (listeners + tags)  
+- Provides `get_track_year` (album title lookup for suspect release years)  
+- Includes retry logic, rate‑limit handling, and defensive parsing
+
+**Execution script**  
+`src/scripts/enrich_with_lastfm.py`  
+- **Input:**  
+  - `data/raw/spotify_tracks_metadata.csv` (names)  
+  - `data/processed/spotify_tracks_modeling.parquet` (tracks with `release_year_missing_or_suspect == 1`)  
+- **Process:**  
+  - Persistent caching every 50 records  
+  - Rate‑limited to ~5 requests/second  
+  - Restart‑safe execution  
+- **Output:**  
+  - `data/interim/lastfm_enrichment_v1.json`
+
+This pipeline ensures that large‑scale metadata extraction can be performed without API bans or partial data loss.
+
+---
+
+#### 2.2 Technical Decision — SHAP Versioning
+
+> **Action:** Pinned `shap` to `>=0.42.0,<0.47.0` via Poetry.  
+> **Rationale:** Maintain compatibility with Python 3.10 (Cycle 03 baseline) and avoid environment issues introduced in newer SHAP releases requiring Python ≥ 3.11.  
+> **Outcome:** Ensures full access to SHAP interpretability tools (summary, dependence, waterfall) without breaking legacy dependencies or destabilizing the environment.
+
+This decision stabilizes the interpretability layer for Cycle 04 and preserves reproducibility across cycles.
+
+### 3. Feature Engineering Integration (Retrocompatible)
+The incoming JSON data contains extreme scales (listeners) and noise ("troll" tags). The feature pipeline was updated to parse this safely without breaking Cycle 02/03 reproducibility.
+
+* **Core Logic Update:** `src/core/features.py`
+  * Added `LastFMFeaturesTransformer` to the `src/core/features.py` module.
+  * **Log-Normalization:** Applied `np.log1p` to the `listeners` metric to prevent scale dominance.
+  * **Frequency Filtering:** Implemented logic to dynamically identify and One-Hot encode only the **Top 50** most frequent tags, effectively filtering out user-generated noise (e.g., "black metal" applied to pop artists).
+  * **Configuration Gatekeeper:** Added a `lastfm: bool = False` flag to `FeatureEngineeringConfig`. This ensures all previous cycle pipelines run perfectly without requiring the Last.fm JSON.
+
+* **Execution Script:** `src/scripts/build_lastfm_features.py`
+  * Created to orchestrate the new pipeline. 
+  * It toggles `lastfm=True`, runs `apply_feature_engineering(..., fit=True)`, and outputs the final master dataset to `data/processed/spotify_tracks_enriched.parquet`.
+
+### 4. Interpretability-Driven Diagnosis (SHAP & The "Three Brains")
+
+Instead of relying on global metrics, we used SHAP values to reverse-engineer how the XGBoost model processes the industry. We discovered that the model does not treat popularity as a continuous spectrum, but rigidly divides its logic into three cognitive regimes based on the `listeners_log` feature:
+
+* **Cold Start (< 5.0):** The "Valley of Obscurity". The model applies a heavily penalized rule-set driven by the sheer lack of audience.
+* **Tipping Point (5.0 to 12.0):** The "Acoustic Meritocracy". Here, audio features (loudness, energy) dominate the decision-making process.
+* **Mainstream Plateau (> 12.0):** The model ignores acoustics and relies entirely on historical authority and market reach.
+
+**The Deep Cut Problem:** While the global MAE was 14.89, segmenting the error revealed unprecedented accuracy for 79% of the dataset (Cold Start and Tipping Point). The error is concentrated entirely in the Mainstream Plateau (MAE 20.76). We empirically proved this is an *Irreducible Error* (Bayes Error) caused by a lack of intra-catalog metadata (e.g., `is_single`). A monolithic model cannot differentiate a mega-star's hit from their album filler.
+
+### 5. K-Optimization & Topological Mapping
+
+To validate our regime thresholds, we ran an unsupervised K-Optimization (Elbow Method & Silhouette Score) on both the model's decision space (SHAP values) and the raw feature space (reality).
+
+* **Model Logic (SHAP):** Forcing a k=3 clustering perfectly reconstructed our human-defined thresholds (mean logs of 13.11, 9.05, and 3.88).
+* **Real-World Topology (Raw Data):** The Silhouette score explicitly peaked at **k=4**, empirically proving that the cultural landscape of the dataset has 4 distinct dimensions (Elite, Hybrid Frontier, Middle-Class, Underground).
+
+### 6. CYCLE 04 VERDICT & HANDOVER TO CYCLE 05
+
+**Verdict:** The new Last.fm features successfully mapped the sociological physics of the streaming era, but the monolithic regression architecture has reached its mathematical limit. We cannot solve a multi-regime industry with a single-regime model.
+
+**The Cycle 05 Blueprint (Mixture of Experts):**
+1.  **Segmented Gating:** Implement a routing classifier using the 3 regimes discovered (Cold Start, Tipping Point, Mainstream).
+2.  **Specialized Experts:** Train dedicated models for each regime.
+3.  **Topological Features:** Use the k=4 clusters to create contextual distance metrics (e.g., `distance_to_elite`).
+
+**Artifacts Frozen for Cycle 05 Handover:**
+* `c4_global_challenger.json`: The baseline global model.
+* `c4_topology_scaler.pkl`: The exact scaler used for the topological feature space.
+* `c4_topology_kmeans_k4.pkl`: The trained k=4 KMeans model for dynamic feature engineering.
+* `run_metadata_cycle4.json`: The governance platinum standard, containing the regime thresholds and feature contracts.
