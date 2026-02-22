@@ -1,7 +1,9 @@
 # src/core/features.py
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from logging import config
 from typing import Iterable, Optional, Tuple
 
 import numpy as np
@@ -18,6 +20,8 @@ class FeatureEngineeringConfig:
     non_linear: bool = True
     market: bool = True
     year_meta: bool = True
+    # Cycle 04: External Context
+    lastfm: bool = False
 
     # Temporal params
     # If None, computed as max year in train during fit (split-safe).
@@ -32,6 +36,9 @@ class FeatureEngineeringConfig:
     year_smoothing: float = 0.0  # additive smoothing (k) for year means
     min_year_count: int = 1  # minimum count to trust year mean
 
+    # Last.fm specific params
+    lastfm_path: Optional[str] = None
+    top_tags_limit: int = 50
 
 # -------------------------
 # Helpers
@@ -48,6 +55,70 @@ def _nullable_bool(values: pd.Series) -> pd.Series:
 # -------------------------
 # Transformers
 # -------------------------
+
+# Adicione este import no topo do src/core/features.py
+import json
+
+class LastFMFeaturesTransformer(BaseEstimator, TransformerMixin):
+    """
+    Enriches the dataset with Last.fm metadata:
+      - artist_listeners_log: log1p of total listeners
+      - top_tags_binary: One-hot encoding for most frequent tags
+      - track_proxy: Album info for suspect dates
+    """
+
+    def __init__(self, enrichment_path: str, top_tags_limit: int = 50):
+        self.enrichment_path = enrichment_path
+        self.top_tags_limit = top_tags_limit
+        self.data_ = {}
+        self.selected_tags_ = []
+
+    def fit(self, X: pd.DataFrame, y=None):
+        # Load the JSON data
+        with open(self.enrichment_path, "r") as f:
+            self.data_ = json.load(f)
+        
+        # Identify top tags across all artists to avoid "troll tags"
+        all_tags = []
+        for artist_info in self.data_.get("artists", {}).values():
+            all_tags.extend(artist_info.get("tags", []))
+        
+        if all_tags:
+            tag_counts = pd.Series(all_tags).value_counts()
+            # Select only the most common tags (signal over noise)
+            self.selected_tags_ = tag_counts.head(self.top_tags_limit).index.tolist()
+            
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        df = X.copy()
+        artists_db = self.data_.get("artists", {})
+        tracks_db = self.data_.get("tracks_metadata", {})
+
+        # 1. Authority Feature: log(listeners)
+        # Formula: $L_{norm} = \log(1 + listeners)$
+        def get_listeners(name):
+            return artists_db.get(name, {}).get("listeners", 0)
+        
+        df["artist_lastfm_listeners_log"] = (
+            df["artist_name"].apply(get_listeners).apply(np.log1p).astype("float32")
+        )
+
+        # 2. Cultural Context: Top Tags Binary Encoding
+        for tag in self.selected_tags_:
+            col_name = f"tag_{tag.replace(' ', '_')}"
+            df[col_name] = df["artist_name"].apply(
+                lambda x: 1 if tag in artists_db.get(x, {}).get("tags", []) else 0
+            ).astype("int8")
+
+        # 3. Temporal Consistency: Track Proxy
+        df["lastfm_track_proxy"] = df.index.astype(str).map(
+            lambda x: tracks_db.get(x, {}).get("corrected_year_proxy")
+        )
+
+        return df
+    
+
 class TemporalFeaturesTransformer(BaseEstimator, TransformerMixin):
     """
     Adds:
@@ -367,6 +438,14 @@ def build_feature_pipeline(config: FeatureEngineeringConfig) -> Pipeline:
     if config.year_meta:
         steps.append(("year_meta", YearMetaFeaturesTransformer(config)))
 
+    if config.lastfm:
+        if config.lastfm_path is None:
+            raise ValueError("lastfm_path must be provided in config if lastfm=True")
+        steps.append(("lastfm", LastFMFeaturesTransformer(
+            enrichment_path=config.lastfm_path,
+            top_tags_limit=config.top_tags_limit
+        )))
+
     return Pipeline(steps)
 
 
@@ -385,15 +464,13 @@ def apply_feature_engineering(
     """
     if fit:
         for _, step in pipeline.steps:
-            if isinstance(step, YearMetaFeaturesTransformer):
-                if y is None:
-                    raise ValueError("YearMetaFeaturesTransformer requires target y during fit.")
-                step.fit(df, y)
+            if isinstance(step, (YearMetaFeaturesTransformer, LastFMFeaturesTransformer)):
+                step.fit(df, y if isinstance(step, YearMetaFeaturesTransformer) else None)
             else:
                 step.fit(df)
             df = step.transform(df)
         return df
-
+    
     for _, step in pipeline.steps:
         df = step.transform(df)
     return df
