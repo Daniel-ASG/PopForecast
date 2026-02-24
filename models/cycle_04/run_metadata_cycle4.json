@@ -1,14 +1,15 @@
 {
     "project": "PopForecast",
     "cycle": 4,
-    "timestamp_utc": "2026-02-22T10:44:01.532026Z",
-    "narrative": "Transition from monolithic regression to Mixture of Experts. Hit the 20.76 MAE ceiling in the Mainstream regime.",
+    "timestamp_utc": "2026-02-23T22:03:34.477588Z",
+    "narrative": "Transition from monolithic regression to Mixture of Experts. The model showed high performance in the Cold Start regime but reached an architectural limit in high-authority segments.",
     "metrics_baseline_to_beat": {
-        "global_mae": 14.89,
+        "test_mae_c3_baseline": 14.39,
+        "global_mae": 14.893945693969727,
         "segmented_mae": {
-            "cold_start": 4.12,
-            "tipping_point": 9.85,
-            "mainstream_plateau": 20.76
+            "cold_start": 12.09,
+            "tipping_point": 17.63,
+            "mainstream_plateau": 19.95
         }
     },
     "cycle_05_blueprint": {
