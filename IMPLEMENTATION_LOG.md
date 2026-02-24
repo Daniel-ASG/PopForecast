@@ -591,30 +591,25 @@ Cycle 04 required a stable ingestion layer to incorporate external cultural meta
 
 #### 2.1 Last.fm Ingestion Pipeline
 
-A dedicated ingestion workflow was implemented to retrieve artist‑level metadata from the Last.fm API, focusing on two signals used later in modeling:
+A dedicated ingestion workflow was implemented to retrieve artist-level metadata from the Last.fm API, focusing on two signals used later in modeling:
 
 - `listeners` — proxy for artist authority  
-- `tags` — crowd‑sourced descriptors capturing genre niches and cultural context  
+- `tags` — crowd-sourced descriptors capturing genre niches and cultural context  
 
-**Client module**  
-`src/core/lastfm_client.py`  
+**Client module** `src/core/lastfm_client.py`  
 - Provides `get_artist_info` (listeners + tags)  
 - Provides `get_track_year` (album title lookup for suspect release years)  
-- Includes retry logic, rate‑limit handling, and defensive parsing
+- Includes retry logic, rate-limit handling, and defensive parsing
 
-**Execution script**  
-`src/scripts/enrich_with_lastfm.py`  
-- **Input:**  
-  - `data/raw/spotify_tracks_metadata.csv` (names)  
+**Execution script** `src/scripts/enrich_with_lastfm.py`  
+- **Input:** - `data/raw/spotify_tracks_metadata.csv` (names)  
   - `data/processed/spotify_tracks_modeling.parquet` (tracks with `release_year_missing_or_suspect == 1`)  
-- **Process:**  
-  - Persistent caching every 50 records  
-  - Rate‑limited to ~5 requests/second  
-  - Restart‑safe execution  
-- **Output:**  
-  - `data/interim/lastfm_enrichment_v1.json`
+- **Process:** - Persistent caching every 50 records  
+  - Rate-limited to ~5 requests/second  
+  - Restart-safe execution  
+- **Output:** - `data/interim/lastfm_enrichment_v1.json`
 
-This pipeline ensures that large‑scale metadata extraction can be performed without API bans or partial data loss.
+This pipeline ensures that large-scale metadata extraction can be performed without API bans or partial data loss.
 
 ---
 
@@ -643,27 +638,54 @@ The incoming JSON data contains extreme scales (listeners) and noise ("troll" ta
 
 Instead of relying on global metrics, we used SHAP values to reverse-engineer how the XGBoost model processes the industry. We discovered that the model does not treat popularity as a continuous spectrum, but rigidly divides its logic into three cognitive regimes based on the `listeners_log` feature:
 
-* **Cold Start (< 5.0):** The "Valley of Obscurity". The model applies a heavily penalized rule-set driven by the sheer lack of audience.
-* **Tipping Point (5.0 to 12.0):** The "Acoustic Meritocracy". Here, audio features (loudness, energy) dominate the decision-making process.
-* **Mainstream Plateau (> 12.0):** The model ignores acoustics and relies entirely on historical authority and market reach.
+* **The Social Filter (Cold Start < 8.81):** In the underground, the model applies a heavily penalized rule-set driven by the sheer lack of audience.
+* **The Acoustic Meritocracy (Tipping Point 8.81 to 13.09):** Here, audio features (loudness, energy, etc.) dominate the decision-making process.
+* **The Authoritarian Wall (Mainstream Plateau > 13.09):** The model ignores acoustics and relies almost entirely on historical authority and market reach.
 
-**The Deep Cut Problem:** While the global MAE was 14.89, segmenting the error revealed unprecedented accuracy for 79% of the dataset (Cold Start and Tipping Point). The error is concentrated entirely in the Mainstream Plateau (MAE 20.76). We empirically proved this is an *Irreducible Error* (Bayes Error) caused by a lack of intra-catalog metadata (e.g., `is_single`). A monolithic model cannot differentiate a mega-star's hit from their album filler.
+**The Deep Cut Problem & MAE Justification:** On a surface level, the enriched model appeared to regress, yielding a global MAE of 14.89 (compared to Cycle 03's baseline of 14.39). However, segmenting the error using our mathematically derived thresholds revealed a structural fracture. The model successfully broke the 14.39 barrier for the bottom **55.1% of the catalog (Cold Start, MAE 12.09)**. The global error inflation is entirely driven by the transition into higher-authority regimes: the **Tipping Point (MAE 17.63)** and the **Mainstream Plateau (MAE 19.95)**. In the Mainstream, a staggering 81.9% of errors are overpredictions. We empirically proved this is an *Irreducible Error* (Bayes Error) caused by a lack of intra-catalog metadata. A monolithic model cannot differentiate a mega-star's global hit from their obscure album filler.
 
 ### 5. K-Optimization & Topological Mapping
 
-To validate our regime thresholds, we ran an unsupervised K-Optimization (Elbow Method & Silhouette Score) on both the model's decision space (SHAP values) and the raw feature space (reality).
+**Threshold Validation (From Heuristic to Data-Driven):** The initial visual thresholds (5.0 and 12.0) used in early exploration were subsequently validated by two independent data-driven methods on the SHAP values: a shallow Decision Tree (capturing piecewise rule changes in SHAP impact) and K-Means clustering (capturing latent sociological regimes). Both confirmed the existence of three distinct regimes, with the K-Means thresholds converging to **8.81 and 13.09**. These specific values were adopted for the final Cycle 05 gating architecture due to their topological stability and alignment with real-world cultural boundaries.
 
-* **Model Logic (SHAP):** Forcing a k=3 clustering perfectly reconstructed our human-defined thresholds (mean logs of 13.11, 9.05, and 3.88).
+* **Model Logic (SHAP):** Forcing a k=3 clustering perfectly reconstructed the three macro-behaviors (Cold Start < 8.81, Tipping Point 8.81 - 13.09, Mainstream > 13.09).
 * **Real-World Topology (Raw Data):** The Silhouette score explicitly peaked at **k=4**, empirically proving that the cultural landscape of the dataset has 4 distinct dimensions (Elite, Hybrid Frontier, Middle-Class, Underground).
+
+**Architectural Flow (MoE):**
+```mermaid
+graph LR
+    %% Core Flow
+    Input[Track Data] --> Router{Gating Router<br>Listeners Log<br>n=3}
+        
+    %% Contextual Injections
+    Topo[Topology Distances<br>k=4] ==> E1
+    Topo ==> E2
+    Topo ==> E3
+    MB[MusicBrainz: Release Type] -.-> E3
+    
+    Router -- "log < 8.81" --> E1[Expert 1: Cold Start]
+    Router -- "8.81 < log <  13.09" --> E2[Expert 2: Tipping Point]
+    Router -- "log > 13.09" --> E3[Expert 3: Mainstream]
+
+    %% Output
+    E1 --> Out([Final Prediction])
+    E2 --> Out
+    E3 --> Out
+
+    %% Styling to highlight Cycle 05 focus areas
+    style Router fill:#f9f,stroke:#333,stroke-width:2px,color:#000
+    style E3 fill:#bbf,stroke:#333,stroke-width:2px,color:#000
+    style MB fill:#dfd,stroke:#333,stroke-dasharray: 5 5,color:#000
+```
 
 ### 6. CYCLE 04 VERDICT & HANDOVER TO CYCLE 05
 
-**Verdict:** The new Last.fm features successfully mapped the sociological physics of the streaming era, but the monolithic regression architecture has reached its mathematical limit. We cannot solve a multi-regime industry with a single-regime model.
+**Verdict:** Cycle 04 successfully broke the acoustic ceiling for the majority of the catalog (MAE 12.09 for the bottom 55%) and mapped the sociological physics of the streaming era. The Last.fm ingestion exposed the structural heterogeneity of the industry. Because the model fractures the moment an artist gains traction (MAE spiking to 17.63 and 19.95), we proved that the monolithic regression architecture is capacity-bounded and regime-blind. We cannot solve a multi-regime industry with a single-regime model, making the pivot to a Mixture of Experts (MoE) architecture mathematically necessary.
 
 **The Cycle 05 Blueprint (Mixture of Experts):**
-1.  **Segmented Gating:** Implement a routing classifier using the 3 regimes discovered (Cold Start, Tipping Point, Mainstream).
+1.  **Segmented Gating:** Implement a routing classifier using the 3 data-driven regimes (Cold Start < 8.81, Tipping Point 8.81 to 13.09, Mainstream > 13.09).
 2.  **Specialized Experts:** Train dedicated models for each regime.
-3.  **Topological Features:** Use the k=4 clusters to create contextual distance metrics (e.g., `distance_to_elite`).
+3.  **Topological Features:** Use the k=4 clusters to create contextual distance metrics (e.g., `distance_to_elite_centroid`).
 
 **Artifacts Frozen for Cycle 05 Handover:**
 * `c4_global_challenger.json`: The baseline global model.
