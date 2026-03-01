@@ -692,3 +692,116 @@ graph LR
 * `c4_topology_scaler.pkl`: The exact scaler used for the topological feature space.
 * `c4_topology_kmeans_k4.pkl`: The trained k=4 KMeans model for dynamic feature engineering.
 * `run_metadata_cycle4.json`: The governance platinum standard, containing the regime thresholds and feature contracts.
+
+---
+
+## 📅 CYCLE 05 — MAINSTREAM REFINEMENT & INTRA-CATALOG CONTEXT (MusicBrainz Integration)
+
+### 1. Goal & Diagnostic (Pivot from Cycle 04)
+* **Objective:** Address the "Authoritarian Wall" (MAE ~19.95) identified in the Mainstream Plateau. 
+* **The Problem:** Cycle 04's SHAP analysis proved that for famous artists, the model ignores acoustics and relies on authority. This causes a systemic overprediction of "Deep Cuts" (obscure album tracks) as if they were global hits.
+* **The Solution:** Integrate **Intra-Catalog Context**. A monolithic model cannot distinguish a hit from a filler track without knowing the track's position and release format.
+
+### 2. Infrastructure & Ingestion (MusicBrainz)
+To close the structural data gap, Cycle 05 introduces a second‑layer extraction pipeline focused on **release structure**.
+
+- **Client Module:** `src/core/musicbrainz_client.py`  
+- **Two‑Tier Sorting Logic:** *Year (Asc) → Release Type (Album > EP > Single) → Full Date*. This guarantees retrieval of the **original release**, even when the API returns hundreds of remasters, reissues, and compilations.  
+- **Orchestrator:** `src/scripts/enrich_with_musicbrainz.py`  
+- **Mainstream Sniper Strategy:** The baseline dataset is filtered to tracks where `artist_lastfm_listeners_log ≥ 13.09`, reducing the extraction universe to **~57,725 unique artist–track pairs**.  
+- **Resilience & State Management:** Stateful ingestion using composite keys (`artist || track`) and **micro‑checkpointing** every 50 records ensures safe pause/resume under strict rate limits.  
+- **Efficiency:** Estimated runtime ~37 hours at 1 request/second, fully restart‑safe.
+
+This architecture ensures that the pipeline captures the true structural context of each track — a prerequisite for correcting the Mainstream bias.
+
+### 3. Feature Engineering Design (Cycle 05)
+**Artifact:** `src/features/build_musicbrainz_features.py`
+
+Instead of hardcoded binary rules (“Top 5 tracks”), Cycle 05 introduces **Continuous Structural Features** that allow XGBoost to learn the **popularity decay curve within an album**.
+
+- **mb_is_single:** Binary flag (1 = Single/EP, 0 = Album).  
+- **mb_track_number:** Absolute track position (captures the “Track 1 effect”).  
+- **mb_prominence_ratio:** Relative position (`track_number / track_count`).  
+
+**Rationale:** A track **8/10** (“Any Colour You Like”) carries a different cultural weight than a track **1/10** (“Money”), even within the same album. The model needs this granularity to avoid overpredicting deep cuts.
+
+### 4. Architectural Decisions
+
+- **Neutral Baseline for Underground:** Tracks below the authority threshold (`artist_lastfm_listeners_log < 13.09`) receive default structural values:  
+  - `mb_is_single = 1`  
+  - `mb_prominence_ratio = 0.0`  
+- **Rationale:** The deep‑cut overprediction bias only affects high‑authority artists. For independent/emerging artists, the most neutral assumption is a **“Single‑like” baseline**, allowing the model to rely primarily on acoustic features.  
+- **Impact:** The **Deep Cut penalty** is applied only when MusicBrainz provides explicit evidence that a track is buried deep in a major artist’s album. Underground tracks are treated as potential lead releases unless proven otherwise.
+
+### 5. Data Debt Refactor (Sanity Cleanup)
+
+* **Problem:** Redundant `_x` and `_y` columns were generated during the Last.fm merge due to name collisions.
+* **Action:** Performed a permanent "Schema Cleanup" on `spotify_tracks_enriched.parquet`.
+* **Changes:**
+* Removed 17 duplicate columns (suffix `_y`).
+* Restored original feature names by removing `_x` suffix.
+* Cleaned legacy index columns (`Unnamed: 0`).
+
+
+* **Result:** Dataset shape stabilized at **(439865, 79)**, restoring the strict data contract required for all downstream MoE models.
+
+### 6. The MusicBrainz Reality Check (Engineering vs. Empirical Evidence)
+
+* **The Data Preparation:** The orchestrator successfully fulfilled its design, cleanly deduplicating inputs, navigating the API's complex entity structures, and persisting a robust JSON of intra-catalog features for the elite tier.
+* **The A/B Test:** With the engineered dataset secured, we trained a Challenger Model incorporating the new `mb_*` structural features against our Baseline Mixture of Experts (MoE).
+* **The Result:** Despite the flawless data ingestion, the structural features (track number, single vs. album) provided **zero predictive lift**.
+* **Domain Insight ("Album Bombing"):** The hypothesis that "Deep Cuts" are penalized naturally by listeners is outdated. In the modern streaming era, when an elite artist drops an album, algorithms and massive fanbases stream the entire discography uniformly. The structural position of a track no longer dictates its popularity for mainstream artists.
+
+### 7. The True Solution: Mixture of Experts (MoE) 2.0
+
+Having discarded the MusicBrainz features, we discovered that the "Deep Cut bias" was merely a symptom of a monolithic architecture trying to average conflicting acoustic rules. The definitive solution was the implementation of a strict routing system based on fan momentum (`artist_lastfm_listeners_log`):
+
+* **Expert 0 (Cold Start / Underground):** `log < 8.81`
+* **Expert 1 (Tipping Point):** `8.81 <= log < 13.09`
+* **Expert 2 (Mainstream Plateau):** `log >= 13.09`
+* **Performance Leap:** By allowing each expert to specialize in its own regime, the **Global MAE plummeted to 8.88** (a massive reduction from previous cycles).
+
+### 8. Explainability: Decoding the "Authoritarian Wall"
+
+Using native XGBoost SHAP values (n=100,000), we visually proved the shift in the "Physics of Success":
+
+* **Acoustic Meritocracy (Underground):** Features like `instrumentalness` and `duration` dictate success. The model scrutinizes the audio DNA.
+* **The Authoritarian Wall (Mainstream):** Elite artists start with a guaranteed popularity baseline (~39.8). `Danceability` drops entirely out of the Top 12 features, and rigid categorical tags (`tag_classical`, `tag_rock`) act as negative filters. The artist's brand shields the song from acoustic micro-fluctuations.
+
+### 9. Architecture Freeze & Export
+
+* **Action:** The training phase is officially closed. The pipeline was frozen to ensure absolute stability for deployment.
+* **Artifacts Persisted:**
+* 3x XGBoost models (`expert_0_cold.joblib`, `expert_1_tipping.joblib`, `expert_2_mainstream.joblib`).
+* `gating_config.json`: The routing logic brain, demanding a strict contract of **exactly 69 features** in a specific order (heavily reliant on Last.fm tags).
+
+### 10. Product Pivot & The Final SAPE (Streamlit App)
+
+* **Cancelled Initiatives:** Aborted a planned Wikidata extraction (Country of Origin). Adding new features at this stage would violate the `gating_config.json` contract and require a full retraining of the MoE pipeline, offering low ROI since Last.fm cultural tags already capture geographic traction.
+* **API Constraints:** Dropped the idea of live Spotify API URL ingestion due to recent severe restrictions on the *Audio Features* endpoint for free developer accounts.
+* **The Final Product ("ReccoBeats A&R Simulator"):** * To bypass the Spotify API limits and test our model on modern, *Out-of-Time* data, we will revive our dormant strategy of leveraging the **ReccoBeats API/Platform** (reccobeats.com).
+* We will extract a recent sample of tracks (including their audio features and popularity), cross-reference them with the Last.fm API to fetch the required genre tags and listener counts, and construct a pristine offline *sandbox* that strictly matches our 69-feature MoE contract.
+* The Streamlit app will function as an **A&R Strategy Simulator**. Users will select these modern tracks and use **What-If Analysis (Sliders)** to alter acoustics or fanbases, watching the MoE Engine dynamically route the track across regimes and recalculate its market potential in real-time.
+
+> **Final Goal Note:** Cycle 05 successfully transitioned the project from experimental research to a production-ready forecasting engine. The next step is pure Software & Data Engineering: transforming the `reccobeats` dataset to match our 69-feature contract and building the interactive Streamlit frontend.
+
+
+## 📅 CYCLE 06 — DEPLOYMENT & PRODUCTION VALIDATION
+
+### 1. Streamlit Application Core
+- **Location:** `src/ui/app.py`
+- **Architecture:** Implemented a Hexagonal-style UI layer that interacts with the MoE Engine.
+- **Data Pipeline:** - Real-time track metadata and acoustic features fetched via **ReccoBeats API**.
+    - Cultural traction and genre tags fetched via **Last.fm API**.
+    - Data transformation layer maps disparate API payloads into the strict **69-feature contract** defined in `gating_config.json`.
+
+### 2. Initial Production Testing (Baseline Results)
+- **Test Subject:** "As It Was" by Harry Styles (Global Hit, Real Popularity: 86).
+- **MoE Routing:** Successfully identified artist traction and routed the request to **Expert 2 (Mainstream)**.
+- **Initial Forecast:** **59/100**.
+- **Observation:** There is a significant residual gap (~27 points) between predicted and actual popularity for global outliers.
+
+### 3. Gap Analysis (Pre-Refinement)
+- **Model Conservatism:** The XGBoost experts exhibit strong regression to the mean, underestimating extreme success stories (90+ scores).
+- **Context Limitation:** While the Last.fm integration successfully activates the correct expert, the model relies heavily on acoustic features which, for elite artists, have a lower correlation with success compared to marketing spend and brand equity.
+- **System Integrity:** Verified that the end-to-end pipeline (API -> Transformation -> Gating -> Prediction) is stable and technically accurate according to the Cycle 05 training protocols.
