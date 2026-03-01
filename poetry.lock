@@ -2036,6 +2036,18 @@ files = [
 typing-extensions = {version = "*", markers = "python_version < \"3.11\""}
 
 [[package]]
+name = "musicbrainzngs"
+version = "0.7.1"
+description = "Python bindings for the MusicBrainz NGS and the Cover Art Archive webservices"
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+groups = ["main"]
+files = [
+    {file = "musicbrainzngs-0.7.1-py2.py3-none-any.whl", hash = "sha256:e841a8f975104c0a72290b09f59326050194081a5ae62ee512f41915090e1a10"},
+    {file = "musicbrainzngs-0.7.1.tar.gz", hash = "sha256:ab1c0100fd0b305852e65f2ed4113c6de12e68afd55186987b8ed97e0f98e627"},
+]
+
+[[package]]
 name = "narwhals"
 version = "2.15.0"
 description = "Extremely lightweight compatibility layer between dataframe libraries"
@@ -4436,4 +4448,4 @@ scikit-learn = ["scikit-learn"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10"
-content-hash = "dbac53489b62104369e001eb3b438b7e8640d7554069fee91ca8edda0192aa16"
+content-hash = "f5df57c6bd0fcae7515ba9d1799623012a3b124f8e16f1130953e8806fb93270"
