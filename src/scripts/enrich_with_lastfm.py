@@ -3,7 +3,7 @@ import json
 import time
 import datetime
 from pathlib import Path
-from src.core.lastfm_client import LastFMClient
+from src.api.lastfm_client import LastFMClient
 
 # --- CONFIGURATION ---
 SMOKE_TEST = False  # Set to False for the full 124k run
