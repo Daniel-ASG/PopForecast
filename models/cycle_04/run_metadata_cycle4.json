@@ -1,7 +1,7 @@
 {
     "project": "PopForecast",
     "cycle": 4,
-    "timestamp_utc": "2026-02-23T22:03:34.477588Z",
+    "timestamp_utc": "2026-02-24T22:25:34.604582Z",
     "narrative": "Transition from monolithic regression to Mixture of Experts. The model showed high performance in the Cold Start regime but reached an architectural limit in high-authority segments.",
     "metrics_baseline_to_beat": {
         "test_mae_c3_baseline": 14.39,
@@ -16,8 +16,8 @@
         "architecture": "Segmented Gating Architecture (MoE)",
         "gating_logic": "artist_lastfm_listeners_log",
         "regime_thresholds": {
-            "cold_start_max": 5.0,
-            "tipping_point_max": 12.0
+            "cold_start_max": 8.8100004196167,
+            "tipping_point_max": 13.09000015258789
         },
         "topological_features": {
             "method": "KMeans_Distance",
