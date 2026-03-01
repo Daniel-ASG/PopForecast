@@ -34,3 +34,4 @@ models/cycle_03/champion.json
 
 # Ignore data and models (use DVC or cloud storage for these)
 data/interim/
+.streamlit/secrets.toml
