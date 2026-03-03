@@ -5,12 +5,13 @@ import requests
 import json
 import joblib
 from pathlib import Path
+from datetime import datetime
 
 # ==========================================
 # 1. SETUP & CACHE (SERVER MEMORY)
 # ==========================================
 st.set_page_config(
-    page_title="ReccoBeats A&R Simulator", 
+    page_title="PopForecast: AI A&R Simulator", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -38,13 +39,40 @@ config, experts = load_moe_engine()
 # ==========================================
 # 2. INFERENCE ENGINE & API HELPERS
 # ==========================================
-# TODO: Replace with your actual Last.fm API Key
-LASTFM_API_KEY = st.secrets["LASTFM_API_KEY"]
+LASTFM_API_KEY = st.secrets.get("LASTFM_API_KEY", "YOUR_LASTFM_KEY")
 RECCOBEATS_BASE = "https://api.reccobeats.com/v1"
 HEADERS = {'Accept': 'application/json'}
 
+def generate_synthetic_baseline(regime_name: str, feature_names: list) -> pd.DataFrame:
+    """Creates a strictly compliant 69-feature vector with neutral means for Sandbox mode."""
+    baselines = {
+        "Cold Start": {"listeners_log": 5.0, "energy": 0.55, "danceability": 0.58},
+        "Tipping Point": {"listeners_log": 11.0, "energy": 0.65, "danceability": 0.62},
+        "Mainstream": {"listeners_log": 15.0, "energy": 0.72, "danceability": 0.68}
+    }
+    
+    selected = baselines.get(regime_name, baselines["Cold Start"])
+    df = pd.DataFrame(0.0, index=[0], columns=feature_names)
+    
+    # ----------------------------------------------------
+    # DYNAMIC YEAR: Fetches the current server year
+    # ----------------------------------------------------
+    current_year = float(datetime.now().year)
+    
+    df.at[0, "artist_lastfm_listeners_log"] = float(selected["listeners_log"])
+    df.at[0, "energy"] = float(selected["energy"])
+    df.at[0, "danceability"] = float(selected["danceability"])
+    df.at[0, "album_release_year"] = current_year  # <--- DYNAMIC FALLBACK
+    df.at[0, "time_signature"] = 4.0
+    
+    acoustics = ['acousticness', 'instrumentalness', 'liveness', 'speechiness', 'valence', 'tempo']
+    for feat in acoustics:
+        df.at[0, feat] = 0.5 if feat != 'tempo' else 120.0
+        
+    return df
+
 def get_lastfm_data(artist_name: str) -> dict:
-    """Fetches Last.fm data ONCE per track load to prevent rate limiting."""
+    """Fetches Last.fm cultural authority and tags."""
     try:
         url = "http://ws.audioscrobbler.com/2.0/"
         params = {"method": "artist.getinfo", "artist": artist_name, "api_key": LASTFM_API_KEY, "format": "json"}
@@ -58,161 +86,262 @@ def get_lastfm_data(artist_name: str) -> dict:
             return {"listeners_log": log_list, "tags": tags}
     except Exception:
         pass
-    return {"listeners_log": 10.0, "tags": []} # Fallback for mid-tier
+    return {"listeners_log": 10.0, "tags": []}
 
-def build_live_inference_matrix(track_info: dict, live_acoustics: dict, live_authority: float, lastfm_tags: list, features_required: list) -> pd.DataFrame:
-    """Transforms data into the strict 69-feature contract."""
+def build_live_base_matrix(track_info: dict, album_info: dict, live_acoustics: dict, lastfm_data: dict, features_required: list) -> pd.DataFrame:
+    """Transforms live API data into the 69-feature dataframe."""
     df = pd.DataFrame(0.0, index=[0], columns=features_required)
     
     markets = track_info.get("availableCountries", "")
     df.at[0, "total_available_markets"] = float(len(markets.split(","))) if markets else 1.0
     df.at[0, "duration_ms"] = float(track_info.get("durationMs", 200000.0))
-    df.at[0, "album_release_year"] = 2024.0
-    df.at[0, "album_release_month"] = 1.0
     df.at[0, "song_explicit"] = 0.0
-    df.at[0, "time_signature"] = 4.0
+    df.at[0, "time_signature"] = float(live_acoustics.get("time_signature", 4.0))
     
+    # ----------------------------------------------------
+    # TEMPORAL CORRECTION: Dynamic extraction with smart fallback
+    # ----------------------------------------------------
+    current_year = float(datetime.now().year)
+    release_date = album_info.get("releaseDate")
+    
+    try:
+        if release_date:
+            real_year = float(release_date.split("-")[0])
+        else:
+            real_year = current_year
+    except Exception:
+        real_year = current_year
+        
+    df.at[0, "album_release_year"] = real_year
+    # ----------------------------------------------------
+
     for feature in ['acousticness', 'danceability', 'energy', 'instrumentalness', 'key', 'liveness', 'loudness', 'mode', 'speechiness', 'tempo', 'valence']:
-        if feature in live_acoustics:
+        if feature in live_acoustics and feature in df.columns:
             df.at[0, feature] = float(live_acoustics[feature])
             
-    df.at[0, "artist_lastfm_listeners_log"] = float(live_authority)
-    for tag in lastfm_tags:
+    df.at[0, "artist_lastfm_listeners_log"] = float(lastfm_data.get("listeners_log", 10.0))
+    
+    for tag in lastfm_data.get("tags", []):
         col_name = f"tag_{tag}"
         if col_name in df.columns:
             df.at[0, col_name] = 1.0
             
     return df
 
-# API Wrappers
+# ==========================================
+# API Wrappers (With UX Sorting Logic)
+# ==========================================
 def search_artists(query: str):
     resp = requests.get(f"{RECCOBEATS_BASE}/artist/search", headers=HEADERS, params={"searchText": query})
-    return resp.json().get("content", []) if resp.status_code == 200 else []
+    if resp.status_code == 200:
+        data = resp.json().get("content", [])
+        # Ordenação 1: Artistas em ordem alfabética (case-insensitive)
+        return sorted(data, key=lambda x: str(x.get('name', '')).lower())
+    return []
 
 def get_artist_albums(artist_id: str):
-    resp = requests.get(f"{RECCOBEATS_BASE}/artist/{artist_id}/album", headers=HEADERS)
-    return resp.json().get("content", []) if resp.status_code == 200 else []
+    albums = []
+    page = 0
+    size = 50
+    
+    # Pagination loop to fetch the entire discography
+    while True:
+        resp = requests.get(f"{RECCOBEATS_BASE}/artist/{artist_id}/album?page={page}&size={size}", headers=HEADERS)
+        if resp.status_code == 200:
+            data = resp.json().get("content", [])
+            if not data:
+                break
+            albums.extend(data)
+            if len(data) < size:
+                break
+            page += 1
+        else:
+            break
+            
+    # Sort chronologically (newest first), fallback to '0000' if missing
+    return sorted(albums, key=lambda x: str(x.get('releaseDate', '0000')), reverse=True)
 
 def get_album_tracks(album_id: str):
     resp = requests.get(f"{RECCOBEATS_BASE}/album/{album_id}/track", headers=HEADERS)
-    return resp.json().get("content", []) if resp.status_code == 200 else []
-
+    if resp.status_code == 200:
+        data = resp.json().get("content", [])
+        # Ordenação 3: Ordem numérica das faixas no álbum (Track 1, Track 2...). 
+        # Se a API não mandar o número, cai pro alfabético.
+        return sorted(data, key=lambda x: (int(x.get('trackNumber', 999)), str(x.get('trackTitle', x.get('name', ''))).lower()))
+    return []
 
 # ==========================================
 # 3. USER INTERFACE (FRONTEND)
 # ==========================================
-st.title("🎛️ ReccoBeats A&R Simulator")
-st.markdown("Select a track and tweak its acoustics to forecast market potential. **Predictions update in real-time.**")
+st.title("🎛️ PopForecast: AI A&R Simulator")
+st.markdown("Forecast market potential using our **Mixture of Experts** Engine.")
 st.divider()
 
+# --- SIDEBAR: MODE SELECTION ---
+st.sidebar.title("🎮 Operation Mode")
+app_mode = st.sidebar.radio("Select Workflow:", ["Live Search", "Strategic Sandbox"])
+st.sidebar.divider()
+
+# --- STATE INITIALIZATION ---
+if "live_track_loaded" not in st.session_state: st.session_state.live_track_loaded = False
+if "sandbox_loaded" not in st.session_state: st.session_state.sandbox_loaded = False
+for k in ["artists", "albums", "tracks"]:
+    if k not in st.session_state: st.session_state[k] = []
+
 # --- MAIN TABS ---
-tab_simulator, tab_methodology = st.tabs(["🎛️ A&R Simulator", "🧠 Architecture & Logic (Methodology)"])
+tab_simulator, tab_methodology = st.tabs(["🚀 A&R Simulator", "🧠 Methodology"])
 
-# ==========================================
-# TAB 1: THE SIMULATOR
-# ==========================================
 with tab_simulator:
-    # Initialize cascade state safely
-    for k in ["artists", "albums", "tracks", "track_data", "original_acoustics", "lastfm_data"]:
-        if k not in st.session_state:
-            st.session_state[k] = [] if k in ["artists", "albums", "tracks"] else {}
+    col_input, col_viz = st.columns([1, 1.8], gap="large")
 
-    def reset_sliders():
-        """Callback to reset sliders to their original acoustic values."""
-        target_features = ['acousticness', 'danceability', 'energy', 'instrumentalness', 'key', 'liveness', 'loudness', 'mode', 'speechiness', 'tempo', 'valence']
-        for feature in target_features:
-            if feature in st.session_state.original_acoustics:
-                slider_key = f"slider_{feature}"
-                if slider_key in st.session_state:
-                    st.session_state[slider_key] = float(st.session_state.original_acoustics[feature])
-        st.session_state["slider_authority"] = st.session_state.lastfm_data["listeners_log"]
+    show_dashboard = False
+    active_df = None
 
-    col_search, col_dash = st.columns([1, 1.8])
+    with col_input:
+        if app_mode == "Live Search":
+            st.subheader("1. Track Selection")
+            query = st.text_input("Search Artist:", placeholder="e.g., Harry Styles", key="search_artist_input")
+            if st.button("🔍 Search API", key="btn_search"):
+                st.session_state.artists = search_artists(query)
+                st.session_state.albums, st.session_state.tracks = [], []
 
-    with col_search:
-        st.subheader("1. Track Selection")
-        
-        query = st.text_input("Search Artist:", placeholder="e.g., Harry Styles", key="search_artist_input")
-        if st.button("🔍 Search", key="btn_search"):
-            st.session_state.artists = search_artists(query)
-            st.session_state.albums = []
-            st.session_state.tracks = []
+            if st.session_state.artists:
+                artist_map = {a['id']: a['name'] for a in st.session_state.artists}
+                sel_artist = st.selectbox("Select Artist:", options=list(artist_map.keys()), format_func=lambda x: artist_map[x])
+                if st.button("💿 Get Albums"):
+                    st.session_state.albums = get_artist_albums(sel_artist)
+                    st.session_state.current_artist_name = artist_map[sel_artist]
 
-        if st.session_state.artists:
-            artist_map = {a['id']: a['name'] for a in st.session_state.artists}
-            sel_artist = st.selectbox("Select Artist:", options=list(artist_map.keys()), format_func=lambda x: artist_map[x], key="select_artist")
-            if st.button("💿 Get Albums", key="btn_albums"):
-                st.session_state.albums = get_artist_albums(sel_artist)
-                st.session_state.current_artist_name = artist_map[sel_artist]
-
-        if st.session_state.albums:
-            album_map = {a['id']: a.get('title', a.get('name', 'Unknown')) for a in st.session_state.albums}
-            sel_album = st.selectbox("Select Album:", options=list(album_map.keys()), format_func=lambda x: album_map[x], key="select_album")
-            if st.button("🎵 Get Tracks", key="btn_tracks"):
-                st.session_state.tracks = get_album_tracks(sel_album)
-
-        if st.session_state.tracks:
-            track_map = {t['id']: t.get('trackTitle', t.get('name', 'Unknown')) for t in st.session_state.tracks}
-            sel_track = st.selectbox("Select Track:", options=list(track_map.keys()), format_func=lambda x: track_map[x], key="select_track")
-            
-            if st.button("⚙️ Load Track to Studio", key="btn_load"):
-                with st.spinner("Fetching Live Data & AI Context..."):
-                    t_info = next((t for t in st.session_state.tracks if t['id'] == sel_track), {})
-                    resp = requests.get(f"{RECCOBEATS_BASE}/track/{sel_track}/audio-features", headers=HEADERS)
+            if st.session_state.albums:
+                # Build a map with the Release Year formatted in the label
+                album_map = {}
+                for a in st.session_state.albums:
+                    title = a.get('title', a.get('name', 'Unknown'))
+                    date = a.get('releaseDate', '')
+                    year = date.split('-')[0] if date else '????'
+                    album_map[a['id']] = f"📅 [{year}] {title}"
                     
-                    if resp.status_code == 200:
-                        st.session_state.track_data = t_info
-                        st.session_state.original_acoustics = resp.json()
-                        st.session_state.lastfm_data = get_lastfm_data(st.session_state.current_artist_name)
-                        reset_sliders()
-                    else:
-                        st.error("Acoustic extraction failed.")
+                sel_album = st.selectbox("Select Album:", options=list(album_map.keys()), format_func=lambda x: album_map[x], key="select_album")
+                
+                if st.button("🎵 Get Tracks", key="btn_tracks"):
+                    st.session_state.tracks = get_album_tracks(sel_album)
 
-    with col_dash:
-        st.subheader("2. Live MoE Dashboard")
-        
-        if st.session_state.original_acoustics:
-            track_name = st.session_state.track_data.get('trackTitle', 'Unknown')
-            artist_name = st.session_state.current_artist_name
-            real_pop = st.session_state.track_data.get('popularity', 'N/A')
-            
-            st.markdown(f"**Live Editing:** `{track_name}` by `{artist_name}`")
-            
-            # SAFE STATE CAPTURE
-            target_features = ['acousticness', 'danceability', 'energy', 'instrumentalness', 'key', 'liveness', 'loudness', 'mode', 'speechiness', 'tempo', 'valence']
-            
-            for feat in target_features:
-                if feat in st.session_state.original_acoustics:
-                    s_key = f"slider_{feat}"
-                    if s_key not in st.session_state:
-                        st.session_state[s_key] = float(st.session_state.original_acoustics[feat])
+            if st.session_state.tracks:
+                # Add [Pop: X] to the dropdown label so the user knows what they are selecting
+                track_map = {
+                    t['id']: f"⭐ [Pop: {t.get('popularity', 0):02d}] {t.get('trackTitle', t.get('name', 'Unknown'))}" 
+                    for t in st.session_state.tracks
+                }
+                sel_track = st.selectbox("Select Track:", options=list(track_map.keys()), format_func=lambda x: track_map[x])
+                
+            if st.button("⚙️ Load Track to Studio", type="primary"):
+                    with st.spinner("Fetching Live Data & AI Context..."):
+                        # 1. Pega os dados da música
+                        t_info = next((t for t in st.session_state.tracks if t['id'] == sel_track), {})
                         
-            if "slider_authority" not in st.session_state:
-                st.session_state["slider_authority"] = float(st.session_state.lastfm_data["listeners_log"])
+                        # 2. Pega os dados do álbum (Para extrair o ano)
+                        a_info = next((a for a in st.session_state.albums if a['id'] == sel_album), {})
+                        
+                        resp = requests.get(f"{RECCOBEATS_BASE}/track/{sel_track}/audio-features", headers=HEADERS)
+                        
+                        if resp.status_code == 200:
+                            lfm_data = get_lastfm_data(st.session_state.current_artist_name)
+                            
+                            # 3. Chama a função passando TODOS os 5 argumentos (incluindo o a_info)
+                            st.session_state.live_df = build_live_base_matrix(
+                                t_info, 
+                                a_info, 
+                                resp.json(), 
+                                lfm_data, 
+                                config['features_required']
+                            )
+                            
+                            st.session_state.live_track_data = t_info
+                            st.session_state.live_track_loaded = True
+                        else:
+                            st.error("Acoustic extraction failed.")
 
-            live_acoustics = {feat: float(st.session_state[f"slider_{feat}"]) for feat in target_features if feat in st.session_state.original_acoustics}
-            live_authority = float(st.session_state["slider_authority"])
+            if st.session_state.live_track_loaded:
+                active_df = st.session_state.live_df
+                show_dashboard = True
+
+        else:
+            # STRATEGIC SANDBOX MODE
+            st.subheader("1. Scenario Designer")
+            tier = st.selectbox("Market Tier Baseline:", ["Cold Start", "Tipping Point", "Mainstream"])
             
-            # ANTI-SABOTAGE TOGGLE
-            ignore_tags = st.checkbox("🛡️ Ignore Niche Cultural Tags (Anti-Sabotage)", key="toggle_tags", help="Clear noisy Last.fm tags that unfairly penalize elite artists.")
-            active_tags = [] if ignore_tags else st.session_state.lastfm_data["tags"]
+            if st.button("🏗️ Initialize Sandbox", type="primary"):
+                st.session_state.sandbox_df = generate_synthetic_baseline(tier, config['features_required'])
+                st.session_state.sandbox_loaded = True
+                
+            if st.session_state.sandbox_loaded:
+                active_df = st.session_state.sandbox_df
+                show_dashboard = True
+
+        # Render Sliders ONLY if a mode is successfully loaded
+        if show_dashboard and active_df is not None:
+            st.divider()
+            st.subheader("2. What-If Controls")
             
-            # BUILD MATRIX
-            df_inf = build_live_inference_matrix(st.session_state.track_data, live_acoustics, live_authority, active_tags, config['features_required'])
+            auth = st.slider("Artist Authority (Log Listeners)", 0.0, 20.0, float(active_df.at[0, "artist_lastfm_listeners_log"]))
             
-            # ROUTING & PREDICTION
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                dance = st.slider("Danceability", 0.0, 1.0, float(active_df.at[0, "danceability"]))
+                energy = st.slider("Energy", 0.0, 1.0, float(active_df.at[0, "energy"]))
+                acoustic = st.slider("Acousticness", 0.0, 1.0, float(active_df.at[0, "acousticness"]))
+            with sc2:
+                valence = st.slider("Valence (Mood)", 0.0, 1.0, float(active_df.at[0, "valence"]))
+                tempo = st.slider("Tempo (BPM)", 0.0, 250.0, float(active_df.at[0, "tempo"]))
+                instrum = st.slider("Instrumentalness", 0.0, 1.0, float(active_df.at[0, "instrumentalness"]))
+
+            # Update Active DF with slider inputs before prediction
+            active_df.at[0, "artist_lastfm_listeners_log"] = auth
+            active_df.at[0, "danceability"] = dance
+            active_df.at[0, "energy"] = energy
+            active_df.at[0, "acousticness"] = acoustic
+            active_df.at[0, "valence"] = valence
+            active_df.at[0, "tempo"] = tempo
+            active_df.at[0, "instrumentalness"] = instrum
+
+    with col_viz:
+        if not show_dashboard:
+            st.info("Awaiting track selection or sandbox initialization...")
+        else:
+            st.subheader("3. Market Forecast")
+            
+            # Context Info
+            if app_mode == "Live Search":
+                track_n = st.session_state.live_track_data.get('trackTitle', 'Unknown')
+                artist_n = st.session_state.get('current_artist_name', 'Unknown')
+                real_pop = st.session_state.live_track_data.get('popularity', 'N/A')
+                st.markdown(f"**Live Editing:** `{track_n}` by `{artist_n}`")
+            else:
+                track_n = "Synthetic Track"
+                artist_n = "Synthetic Artist"
+                real_pop = "N/A (Sandbox)"
+                st.markdown(f"**Live Editing:** `{tier}` Baseline Scenario")
+
+            # Anti-Sabotage Logic (Create a copy to preserve state tags)
+            final_df = active_df.copy()
+            ignore_tags = st.checkbox("🛡️ Ignore Niche Cultural Tags (Anti-Sabotage)", help="Bypass noisy Last.fm tags that penalize elite artists.")
+            if ignore_tags:
+                tag_cols = [c for c in final_df.columns if c.startswith('tag_')]
+                final_df[tag_cols] = 0.0
+
+            # Routing Logic
             t1, t2 = config.get("listeners_log_threshold_1", 8.81), config.get("listeners_log_threshold_2", 13.09)
-            if live_authority < t1:
+            if auth < t1:
                 exp_id, regime, color = 0, "Cold Start (Underground)", "🔴"
-            elif live_authority < t2:
+            elif auth < t2:
                 exp_id, regime, color = 1, "Tipping Point", "🟡"
             else:
                 exp_id, regime, color = 2, "Mainstream (Elite)", "🟢"
                 
             model = experts[exp_id]
-            pred_pop = max(0, min(100, int(round(model.predict(df_inf)[0]))))
+            pred_pop = max(0, min(100, int(round(model.predict(final_df)[0]))))
             
-            # TOP PANEL UI
+            # UI Metrics Panel
             top_c1, top_c2, top_c3 = st.columns([1, 1, 1])
             top_c1.metric("Real Market Popularity", real_pop)
             
@@ -220,31 +349,14 @@ with tab_simulator:
             top_c2.metric("Forecasted Potential", pred_pop, delta=delta)
             top_c3.info(f"{color} **Expert {exp_id}**\n\n{regime}")
 
-            st.divider()
-            st.button("🔄 Reset Original Track State", on_click=reset_sliders, type="secondary", key="btn_reset_main")
-            
-            # SLIDERS
-            st.markdown("### 🎚️ What-If Controls")
-            st.slider("Artist Authority (Log Listeners)", 0.0, 20.0, key="slider_authority", help="Lower to simulate an unknown artist (Expert 0).")
-            
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                st.slider("Danceability", 0.0, 1.0, key="slider_danceability")
-                st.slider("Energy", 0.0, 1.0, key="slider_energy")
-                st.slider("Acousticness", 0.0, 1.0, key="slider_acousticness")
-            with sc2:
-                st.slider("Valence (Mood)", 0.0, 1.0, key="slider_valence")
-                st.slider("Tempo (BPM)", 0.0, 250.0, key="slider_tempo")
-                st.slider("Instrumentalness", 0.0, 1.0, key="slider_instrumentalness")
-
-            # FEATURE IMPORTANCE (TABS)
+            # Interpretability (XAI)
             with st.expander("📊 View Model Logic (Feature Importance)", expanded=True):
                 tab_local, tab_global = st.tabs(["🎯 Active Drivers (This Track)", "🌍 Global Rules (Expert Memory)"])
                 importance = model.get_booster().get_score(importance_type='gain')
                 
                 with tab_local:
                     st.caption("Shows only the features actively driving the current score.")
-                    active_features = [col for col in df_inf.columns if df_inf.at[0, col] > 0.0]
+                    active_features = [col for col in final_df.columns if final_df.at[0, col] > 0.0]
                     filtered_importance = {k: v for k, v in importance.items() if k in active_features}
                     
                     if filtered_importance:
@@ -260,41 +372,21 @@ with tab_simulator:
                     feat_df_global['Feature'] = feat_df_global['Feature'].apply(lambda x: x.replace('_', ' ').title())
                     st.bar_chart(feat_df_global.sort_values('Importance', ascending=False).head(10), x='Feature', y='Importance')
 
-            # EXPORT REPORT
+            # Export Audit Report
             st.divider()
             report_data = {
-                "metadata": {
-                    "track": track_name,
-                    "artist": artist_name,
-                    "real_popularity": real_pop,
-                    "forecasted_popularity": pred_pop,
-                    "expert_regime": regime
-                },
-                "simulation_settings": {
-                    "anti_sabotage_toggle_active": ignore_tags,
-                    "simulated_authority_log": live_authority,
-                    "simulated_acoustics": live_acoustics
-                },
-                "model_interpretability": {
-                    "local_active_drivers_for_this_track": filtered_importance if 'filtered_importance' in locals() else {},
-                    "global_rules_for_expert": importance if 'importance' in locals() else {}
-                }
+                "metadata": {"track": track_n, "artist": artist_n, "real_popularity": real_pop, "forecast": pred_pop, "regime": regime},
+                "simulation": {"anti_sabotage": ignore_tags, "simulated_features": final_df.iloc[0].to_dict()},
+                "interpretability": {"active_drivers": filtered_importance if 'filtered_importance' in locals() else {}}
             }
-            report_json = json.dumps(report_data, indent=4)
-            
             st.download_button(
                 label="📥 Download A&R Simulation Report",
-                data=report_json,
-                file_name=f"ReccoBeats_Report_{track_name.replace(' ', '_')}.json",
+                data=json.dumps(report_data, indent=4),
+                file_name=f"PopForecast_Report_{track_n.replace(' ', '_')}.json",
                 mime="application/json",
                 type="primary"
             )
-        else:
-            st.info("Awaiting track selection...")
 
-# ==========================================
-# TAB 2: METHODOLOGY (FOR RECRUITERS & A&Rs)
-# ==========================================
 with tab_methodology:
     st.header("The Science Behind the Prediction")
     st.markdown("""
@@ -308,9 +400,4 @@ with tab_methodology:
     * **🔴 Expert 0 (Cold Start):** Specialized in unknown/underground artists. Focuses heavily on raw acoustics and meta-data, as brand authority does not yet exist.
     * **🟡 Expert 1 (Tipping Point):** Specialized in mid-tier artists breaking into the mainstream.
     * **🟢 Expert 2 (Mainstream):** Specialized in elite global stars, where brand authority heavily outweighs acoustic nuances, creating an "Authoritarian Wall."
-    
-    ### Dealing with Data Contamination
-    Crowd-sourced metadata (like genres and tags) can be noisy. For instance, a troll tagging a mainstream pop song as "Classical" can severely sabotage the model's prediction. We built the **Anti-Sabotage Toggle** to let A&R executives clean the data context dynamically, relying purely on the track's acoustic DNA and the artist's structural authority.
     """)
-    
-    st.info("💡 **Try it out:** Go back to the Simulator, select a mainstream artist, and manually lower their 'Artist Authority' slider to zero. Watch the Gating Network instantly re-route the track to the Cold Start expert and recalculate its potential!")
