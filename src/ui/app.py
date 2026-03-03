@@ -132,12 +132,60 @@ def build_live_base_matrix(track_info: dict, album_info: dict, live_acoustics: d
 # API Wrappers (With UX Sorting Logic)
 # ==========================================
 def search_artists(query: str):
-    resp = requests.get(f"{RECCOBEATS_BASE}/artist/search", headers=HEADERS, params={"searchText": query})
-    if resp.status_code == 200:
-        data = resp.json().get("content", [])
-        # Ordenação 1: Artistas em ordem alfabética (case-insensitive)
-        return sorted(data, key=lambda x: str(x.get('name', '')).lower())
-    return []
+    """
+    Searches for artists, overcoming API alphabetical truncation by 
+    paginating results and applying a custom Exact Match heuristic.
+    """
+    all_artists = {}
+    page = 0
+    
+    # 1. Fetch up to 5 pages. Send both page/size and offset/limit to ensure compatibility.
+    while page < 5:
+        params = {
+            "searchText": query, 
+            "page": page, "size": 50, 
+            "offset": page * 50, "limit": 50
+        } 
+        resp = requests.get(f"{RECCOBEATS_BASE}/artist/search", headers=HEADERS, params=params)
+        
+        if resp.status_code == 200:
+            data = resp.json().get("content", [])
+            if not data:
+                break
+                
+            added_new = False
+            for artist in data:
+                aid = artist.get('id')
+                if aid not in all_artists:
+                    all_artists[aid] = artist
+                    added_new = True
+                    
+            if not added_new or len(data) < 10:
+                break
+            
+            page += 1
+        else:
+            break
+            
+    # 2. Custom Heuristic Scoring (0 is the best match)
+    def match_score(name):
+        n = str(name).lower().strip()
+        q = query.lower().strip()
+        if n == q: return 0  
+        if n.startswith(q + " "): return 1 
+        if n.startswith(q): return 2  
+        return 3      
+
+    # 3. Sort by: Match Quality first, then Popularity (or Followers as fallback)
+    def get_traction(artist_dict):
+        pop = int(artist_dict.get('popularity', 0))
+        foll = int(artist_dict.get('followers', {}).get('total', 0))
+        return pop + (foll / 1000000) # Combine to ensure higher is always better
+
+    return sorted(list(all_artists.values()), key=lambda x: (
+        match_score(x.get('name', '')), 
+        -get_traction(x)
+    ))
 
 def get_artist_albums(artist_id: str):
     albums = []
@@ -165,8 +213,8 @@ def get_album_tracks(album_id: str):
     resp = requests.get(f"{RECCOBEATS_BASE}/album/{album_id}/track", headers=HEADERS)
     if resp.status_code == 200:
         data = resp.json().get("content", [])
-        # Ordenação 3: Ordem numérica das faixas no álbum (Track 1, Track 2...). 
-        # Se a API não mandar o número, cai pro alfabético.
+        # Sort 3: Numerical order of tracks in the album (Track 1, Track 2...). 
+        # If the API doesn't send the number, fallback to alphabetical.
         return sorted(data, key=lambda x: (int(x.get('trackNumber', 999)), str(x.get('trackTitle', x.get('name', ''))).lower()))
     return []
 
@@ -206,11 +254,22 @@ with tab_simulator:
                 st.session_state.albums, st.session_state.tracks = [], []
 
             if st.session_state.artists:
-                artist_map = {a['id']: a['name'] for a in st.session_state.artists}
+                # UX Clean-up: Removed the popularity seal to avoid cluttering 
+                # while keeping the robust sorting logic in the background.
+                artist_map = {
+                    a['id']: a.get('name', 'Unknown') 
+                    for a in st.session_state.artists
+                }
+                
                 sel_artist = st.selectbox("Select Artist:", options=list(artist_map.keys()), format_func=lambda x: artist_map[x])
+                
                 if st.button("💿 Get Albums"):
                     st.session_state.albums = get_artist_albums(sel_artist)
-                    st.session_state.current_artist_name = artist_map[sel_artist]
+                    # We still extract the clean original name for the internal Last.fm judge
+                    st.session_state.current_artist_name = next(
+                        (a['name'] for a in st.session_state.artists if a['id'] == sel_artist), 
+                        "Unknown"
+                    )
 
             if st.session_state.albums:
                 # Build a map with the Release Year formatted in the label
@@ -236,10 +295,10 @@ with tab_simulator:
                 
             if st.button("⚙️ Load Track to Studio", type="primary"):
                     with st.spinner("Fetching Live Data & AI Context..."):
-                        # 1. Pega os dados da música
+                        # 1. Get track data
                         t_info = next((t for t in st.session_state.tracks if t['id'] == sel_track), {})
                         
-                        # 2. Pega os dados do álbum (Para extrair o ano)
+                        # 2. Get album data (to extract the year)
                         a_info = next((a for a in st.session_state.albums if a['id'] == sel_album), {})
                         
                         resp = requests.get(f"{RECCOBEATS_BASE}/track/{sel_track}/audio-features", headers=HEADERS)
@@ -247,7 +306,7 @@ with tab_simulator:
                         if resp.status_code == 200:
                             lfm_data = get_lastfm_data(st.session_state.current_artist_name)
                             
-                            # 3. Chama a função passando TODOS os 5 argumentos (incluindo o a_info)
+                            # 3. Call the function passing ALL 5 arguments (including a_info)
                             st.session_state.live_df = build_live_base_matrix(
                                 t_info, 
                                 a_info, 
