@@ -136,7 +136,8 @@ def search_artists(query: str):
     Hybrid Search Engine: 
     1. Checks Local Fallback Cache (VIP Injector) for hard-to-find artists.
     2. Scans API for general queries.
-    3. Uses cross-API triangulation (Last.fm) to resolve homonyms.
+    3. Uses semantic normalization to handle "The" prefixes (e.g., The Beatles).
+    4. Uses cross-API triangulation (Last.fm) to resolve popularity gaps.
     """
     all_artists = {}
     query_clean = query.lower().strip()
@@ -144,14 +145,12 @@ def search_artists(query: str):
     # ==========================================
     # 1. LOCAL FALLBACK CACHE (VIP Injector)
     # ==========================================
-    # Hardcoded official Spotify IDs for artists hidden by the API's fuzzy search.
     VIP_ARTISTS = {
         "sia": {"id": "e3e411cc-44f9-40e5-9a21-a53d65f0dbda", "name": "Sia", "popularity": 100},
         "slipknot": {"id": "d65c0493-82bd-4aff-98a2-7d9618e6c1f4", "name": "Slipknot", "popularity": 100},
         "angra": {"id": "7182dd73-33af-432b-8e6b-53808f11fa3b", "name": "Angra", "popularity": 100}
     }
     
-    # If the user typed an exact VIP match, inject it with maximum priority.
     if query_clean in VIP_ARTISTS:
         vip = VIP_ARTISTS[query_clean]
         all_artists[vip["id"]] = vip
@@ -171,7 +170,6 @@ def search_artists(query: str):
                 added_in_this_page = 0
                 for artist in data:
                     aid = artist.get('id')
-                    # Prevent overwriting our VIP entry if the API happens to find it
                     if aid not in all_artists:
                         all_artists[aid] = artist
                         added_in_this_page += 1
@@ -182,28 +180,44 @@ def search_artists(query: str):
         except: break
 
     # ==========================================
-    # 3. SCORING & SORTING
+    # 3. SEMANTIC SCORING & TRIANGULATION
     # ==========================================
     def get_match_quality(name):
         n = str(name).lower().strip()
-        if n == query_clean: return 0                # Exact match
-        if n.startswith(query_clean + " "): return 1 # Exact first word
-        if n.startswith(query_clean): return 2       # Prefix match
-        return 3                                     # Fuzzy/Contains
+        # Create a version without "The " for fair comparison
+        # Example: "the beatles" -> "beatles"
+        n_no_the = n[4:] if n.startswith("the ") else n
+        
+        if n == query_clean or n_no_the == query_clean: 
+            return 0  # Exact match (Top Priority)
+        
+        if n.startswith(query_clean + " ") or n_no_the.startswith(query_clean + " "): 
+            return 1  # Exact first word
+            
+        if n.startswith(query_clean) or n_no_the.startswith(query_clean): 
+            return 2  # Prefix match
+            
+        return 3      # Fuzzy/Contains (Low Priority)
 
     def get_real_traction(artist):
-        # VIPs and valid API results might already have popularity > 0
+        # We trust the API popularity if it's already significant
         pop = int(artist.get('popularity', 0))
-        if pop > 0: return float(pop)
+        if pop > 10: return float(pop)
         
-        # Fallback to Last.fm ONLY for high-quality matches to save API quota
-        quality = get_match_quality(artist.get('name'))
-        if quality <= 1:
-            lfm = get_lastfm_data(artist.get('name'))
-            # Base score of 50 ensures exact name matches beat obscure partial matches
+        name = artist.get('name', '')
+        quality = get_match_quality(name)
+        
+        # TRIGGER: If the quality is high (0, 1 or 2) but API popularity is low/zero,
+        # we triangulate with Last.fm to ensure legends aren't buried.
+        if quality <= 2:
+            lfm = get_lastfm_data(name)
+            # Log-scale listeners act as the ultimate tie-breaker.
+            # Base 50 ensures high-quality matches beat obscure high-popularity API noise.
             return 50.0 + lfm.get('listeners_log', 0)
+            
         return 0.0
 
+    # Sort primarily by Quality (0 is best) and secondarily by Traction (Higher is better)
     return sorted(list(all_artists.values()), key=lambda x: (
         get_match_quality(x.get('name', '')), 
         -get_real_traction(x)
@@ -364,26 +378,55 @@ with tab_simulator:
             st.divider()
             st.subheader("2. What-If Controls")
             
-            auth = st.slider("Artist Authority (Log Listeners)", 0.0, 20.0, float(active_df.at[0, "artist_lastfm_listeners_log"]))
+            # 1. PRIMARY CONTROL: Artist Authority
+            auth = st.slider(
+                "Artist Authority (Log Listeners)", 
+                0.0, 20.0, 
+                float(active_df.at[0, "artist_lastfm_listeners_log"]),
+                help="The cultural power of the artist. Moving this will trigger different Experts in the MoE engine."
+            )
             
+            # 2. CORE ACOUSTIC FEATURES (Always Visible)
             sc1, sc2 = st.columns(2)
             with sc1:
                 dance = st.slider("Danceability", 0.0, 1.0, float(active_df.at[0, "danceability"]))
                 energy = st.slider("Energy", 0.0, 1.0, float(active_df.at[0, "energy"]))
-                acoustic = st.slider("Acousticness", 0.0, 1.0, float(active_df.at[0, "acousticness"]))
-            with sc2:
                 valence = st.slider("Valence (Mood)", 0.0, 1.0, float(active_df.at[0, "valence"]))
-                tempo = st.slider("Tempo (BPM)", 0.0, 250.0, float(active_df.at[0, "tempo"]))
+            with sc2:
+                tempo = st.slider("Tempo (BPM)", 50.0, 220.0, float(active_df.at[0, "tempo"]))
+                acoustic = st.slider("Acousticness", 0.0, 1.0, float(active_df.at[0, "acousticness"]))
                 instrum = st.slider("Instrumentalness", 0.0, 1.0, float(active_df.at[0, "instrumentalness"]))
 
-            # Update Active DF with slider inputs before prediction
+            # 3. ADVANCED TUNING (Hidden in Expander)
+            with st.expander("🛠️ Advanced Acoustic Tuning"):
+                st.caption("Fine-tune technical parameters that influence niche market performance.")
+                ac1, ac2 = st.columns(2)
+                with ac1:
+                    liveness = st.slider("Liveness", 0.0, 1.0, float(active_df.at[0, "liveness"]))
+                    speech = st.slider("Speechiness", 0.0, 1.0, float(active_df.at[0, "speechiness"]))
+                    loudness = st.slider("Loudness (dB)", -60.0, 0.0, float(active_df.at[0, "loudness"]))
+                with ac2:
+                    key = st.number_input("Key (0-11)", 0, 11, int(active_df.at[0, "key"]))
+                    mode = st.radio("Mode", [0, 1], index=int(active_df.at[0, "mode"]), horizontal=True, help="0: Minor, 1: Major")
+                    time_sig = st.number_input("Time Signature", 1, 7, int(active_df.at[0, "time_signature"]))
+
+            # ==========================================
+            # DYNAMIC UPDATE: Syncing Sliders to DF
+            # ==========================================
+            # Explicitly mapping all 12 controllable features
             active_df.at[0, "artist_lastfm_listeners_log"] = auth
             active_df.at[0, "danceability"] = dance
             active_df.at[0, "energy"] = energy
-            active_df.at[0, "acousticness"] = acoustic
             active_df.at[0, "valence"] = valence
             active_df.at[0, "tempo"] = tempo
+            active_df.at[0, "acousticness"] = acoustic
             active_df.at[0, "instrumentalness"] = instrum
+            active_df.at[0, "liveness"] = liveness
+            active_df.at[0, "speechiness"] = speech
+            active_df.at[0, "loudness"] = loudness
+            active_df.at[0, "key"] = float(key)
+            active_df.at[0, "mode"] = float(mode)
+            active_df.at[0, "time_signature"] = float(time_sig)
 
     with col_viz:
         if not show_dashboard:
