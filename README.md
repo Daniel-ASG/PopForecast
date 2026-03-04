@@ -8,6 +8,8 @@
 
 > A Machine Learning end-to-end platform that leverages a **Mixture of Experts (MoE)** architecture and **Explainable AI (XAI)** to forecast the organic market potential of music tracks, acting as a digital compass for A&R (Artists and Repertoire) executives.
 
+👉 **[Try the Live App on Streamlit](https://popforecast.streamlit.app/)** 👈
+
 <a id='index'></a>
 ## Index
 
@@ -63,6 +65,9 @@ The application provides an interactive playground for A&Rs:
 * **Real-time Ingestion:** Fetches metadata directly from **ReccoBeats** and **Last.fm** APIs.
 * **What-If Controls:** Interactive sliders for acoustic features allowing producers to simulate mix adjustments before release.
 * **The "Anti-Sabotage" Toggle:** A unique data-cleaning feature that dynamically filters noisy crowd-sourced tags to reveal the track's true pop potential.
+
+Don't just take my word for it. Test how the "Authoritarian Wall" affects underground vs mainstream artists in real-time:
+🚀 **[Run your own simulation here](https://popforecast.streamlit.app/)**
 
 <a id='XAI'></a>
 ### 2.2. Dual-Layer Explainability (XAI)
@@ -166,6 +171,11 @@ This section guides you through running the PopForecast Live A&R Simulator on yo
 
 **Instructions:**
 
+Don't want to install dependencies? 
+**[Play with the live version on Streamlit Cloud](https://popforecast.streamlit.app/)** instead!
+
+If you prefer to run the environment locally, follow these steps:
+
 1. Clone this repository to your local machine:
 ```bash
 git clone [https://github.com/Daniel-ASG/PopForecast.git](https://github.com/Daniel-ASG/PopForecast.git)
@@ -201,8 +211,6 @@ LASTFM_API_KEY = "your_lastfm_key_here"
 poetry run streamlit run src/ui/app.py
 
 ```
-
-
 
 ---
 
