@@ -257,11 +257,36 @@ def get_album_tracks(album_id: str):
 # ==========================================
 # 3. USER INTERFACE (FRONTEND)
 # ==========================================
-st.title("🎛️ PopForecast: AI A&R Simulator")
-st.markdown("Forecast market potential using our **Mixture of Experts** Engine.")
-st.divider()
 
-# --- SIDEBAR: MODE SELECTION ---
+# --- MAIN HEADER: Dashboard Landing ---
+st.write("# 🎵 PopForecast Dashboard")
+st.markdown(
+    '''
+    ### This simulator is designed to decode the non-linear rules of musical success.
+    
+    ### How to use this Simulator?
+    - **Live Search (Real Tracks):**
+        - Search for an artist, select one of their albums, and pick a specific track to extract its live acoustic DNA and current cultural traction.
+    - **Strategic Sandbox (Synthetic Tracks):**
+        - Don't have a specific track? Choose a Market Tier Baseline (Cold Start, Tipping Point, or Mainstream) to generate a synthetic scenario and build a track's DNA from scratch.
+    - **What-If Controls (Sidebar):**
+        - Fine-tune acoustic features (Danceability, Energy, Valence) and technical parameters (Loudness, Speechiness).
+        - Adjust the **Artist Authority** to see how the exact same track would perform if released by an indie artist versus a global superstar.
+    - **MoE Routing (The AI Brain):**
+        - Watch the Gating Network dynamically route your track to the correct specialized Expert (*Cold Start*, *Tipping Point*, or *Mainstream*) based on the artist's market power.
+        
+    ### Get in Touch
+    - Let's connect! Reach out on Discord: **@daniel_asg**
+    - For a deep dive into the Machine Learning pipeline, feature engineering, and the MoE architecture, visit the [PopForecast project page on GitHub](https://github.com/Daniel-ASG/popforecast). Thanks for your visit!
+    '''
+)
+st.markdown('''___''')
+
+# --- SIDEBAR: Branding & Mode Selection ---
+st.sidebar.markdown('# 🎧 PopForecast')
+st.sidebar.markdown('## AI A&R Simulator')
+st.sidebar.markdown('''___''')
+
 st.sidebar.title("🎮 Operation Mode")
 app_mode = st.sidebar.radio("Select Workflow:", ["Live Search", "Strategic Sandbox"])
 st.sidebar.divider()
@@ -525,3 +550,7 @@ with tab_methodology:
     * **🟡 Expert 1 (Tipping Point):** Specialized in mid-tier artists breaking into the mainstream.
     * **🟢 Expert 2 (Mainstream):** Specialized in elite global stars, where brand authority heavily outweighs acoustic nuances, creating an "Authoritarian Wall."
     """)
+
+# --- SIDEBAR FOOTER: Credits ---
+# st.sidebar.markdown('''___''')
+st.sidebar.markdown('##### Data Scientist: Daniel Gomes')
