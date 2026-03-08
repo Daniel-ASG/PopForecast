@@ -16,6 +16,55 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+st.markdown("""
+    <style>
+    /* 1. General container styling (Dark Theme) */
+    [data-testid="stVerticalBlock"] > div:has(div.stMetric) {
+        background-color: #262730; /* Elegant dark background */
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 0px 4px 15px rgba(0, 0, 0, 0.4); /* Deeper shadow */
+        border: 1px solid rgba(255, 255, 255, 0.05); /* Very subtle glowing border */
+    }
+    
+    /* 2. Fix for Input Boxes and Dropdowns disappearing */
+    div[data-baseweb="base-input"], 
+    div[data-baseweb="select"] > div {
+        background-color: rgba(255, 255, 255, 0.05) !important; /* Persistent glass background */
+        border: 1px solid rgba(255, 255, 255, 0.1) !important; /* Subtle outline */
+        border-radius: 8px !important;
+        color: white !important;
+    }
+    
+    /* Hover effect for inputs to make them feel responsive */
+    div[data-baseweb="base-input"]:hover, 
+    div[data-baseweb="select"] > div:hover {
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
+        background-color: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    /* 3. Visual improvement for Sliders */
+    .stSlider > div [data-baseweb="slider"] {
+        width: 95%;
+    }
+    
+    /* 4. Highlighted buttons (Dark Theme) */
+    .stButton>button {
+        width: 100%;
+        border-radius: 8px; /* Squarer, tech-oriented look */
+        border: 1px solid #ff4b4b;
+        background-color: transparent; /* Transparent background */
+        color: white;
+        transition: all 0.3s;
+    }
+    .stButton>button:hover {
+        background-color: #ff4b4b;
+        color: white;
+        box-shadow: 0px 0px 10px rgba(255, 75, 75, 0.4); /* Subtle neon effect */
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = PROJECT_ROOT / "models" / "cycle_05"
 
@@ -401,26 +450,32 @@ with tab_simulator:
         # Render Sliders ONLY if a mode is successfully loaded
         if show_dashboard and active_df is not None:
             st.divider()
-            st.subheader("2. What-If Controls")
             
-            # 1. PRIMARY CONTROL: Artist Authority
-            auth = st.slider(
-                "Artist Authority (Log Listeners)", 
-                0.0, 20.0, 
-                float(active_df.at[0, "artist_lastfm_listeners_log"]),
-                help="The cultural power of the artist. Moving this will trigger different Experts in the MoE engine."
-            )
-            
-            # 2. CORE ACOUSTIC FEATURES (Always Visible)
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                dance = st.slider("Danceability", 0.0, 1.0, float(active_df.at[0, "danceability"]))
-                energy = st.slider("Energy", 0.0, 1.0, float(active_df.at[0, "energy"]))
-                valence = st.slider("Valence (Mood)", 0.0, 1.0, float(active_df.at[0, "valence"]))
-            with sc2:
-                tempo = st.slider("Tempo (BPM)", 50.0, 220.0, float(active_df.at[0, "tempo"]))
-                acoustic = st.slider("Acousticness", 0.0, 1.0, float(active_df.at[0, "acousticness"]))
-                instrum = st.slider("Instrumentalness", 0.0, 1.0, float(active_df.at[0, "instrumentalness"]))
+            # Grouping controls in a single stylized container
+            with st.container():
+                st.markdown("### 🎛️ Acoustic Sandbox Controls")
+                st.markdown("<p style='color: #a0a0a0; font-size: 0.9em; margin-bottom: 15px;'>Fine-tune the acoustic signature to simulate MoE gating and market response.</p>", unsafe_allow_html=True)
+                
+                # 1. PRIMARY CONTROL: Artist Authority
+                auth = st.slider(
+                    "👑 Artist Authority (Log Listeners)", 
+                    0.0, 20.0, 
+                    float(active_df.at[0, "artist_lastfm_listeners_log"]),
+                    help="The cultural power of the artist. Moving this will trigger different Experts in the MoE engine."
+                )
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # 2. CORE ACOUSTIC FEATURES (Always Visible)
+                sc1, sc2 = st.columns(2)
+                with sc1:
+                    dance = st.slider("🕺 Danceability", 0.0, 1.0, float(active_df.at[0, "danceability"]))
+                    energy = st.slider("⚡ Energy", 0.0, 1.0, float(active_df.at[0, "energy"]))
+                    valence = st.slider("😊 Valence (Mood)", 0.0, 1.0, float(active_df.at[0, "valence"]))
+                with sc2:
+                    tempo = st.slider("🥁 Tempo (BPM)", 50.0, 220.0, float(active_df.at[0, "tempo"]))
+                    acoustic = st.slider("🎸 Acousticness", 0.0, 1.0, float(active_df.at[0, "acousticness"]))
+                    instrum = st.slider("🎹 Instrumentalness", 0.0, 1.0, float(active_df.at[0, "instrumentalness"]))
 
             # 3. ADVANCED TUNING (Hidden in Expander)
             with st.expander("🛠️ Advanced Acoustic Tuning"):
@@ -491,12 +546,31 @@ with tab_simulator:
             pred_pop = max(0, min(100, int(round(model.predict(final_df)[0]))))
             
             # UI Metrics Panel
+            # UI Metrics Panel (Tiles implementation)
             top_c1, top_c2, top_c3 = st.columns([1, 1, 1])
-            top_c1.metric("Real Market Popularity", real_pop)
             
-            delta = f"{pred_pop - int(real_pop)} vs Real" if str(real_pop).isdigit() else None
-            top_c2.metric("Forecasted Potential", pred_pop, delta=delta)
-            top_c3.info(f"{color} **Expert {exp_id}**\n\n{regime}")
+            with top_c1:
+                with st.container():
+                    st.markdown("<p style='color: #a0a0a0; font-size: 0.9em; margin-bottom: 0;'>Current Status</p>", unsafe_allow_html=True)
+                    st.metric("Real Market Popularity", real_pop)
+                    
+            with top_c2:
+                with st.container():
+                    st.markdown("<p style='color: #a0a0a0; font-size: 0.9em; margin-bottom: 0;'>AI Forecast</p>", unsafe_allow_html=True)
+                    delta = f"{pred_pop - int(real_pop)} vs Real" if str(real_pop).isdigit() else None
+                    st.metric("Forecasted Potential", pred_pop, delta=delta)
+                    
+            with top_c3:
+                # Custom Status Badge for MoE Expert
+                badge_html = f"""
+                <div style="background-color: {('rgba(255, 75, 75, 0.15)' if exp_id==0 else 'rgba(255, 215, 0, 0.15)' if exp_id==1 else 'rgba(0, 255, 127, 0.15)')}; 
+                            border: 1px solid {('red' if exp_id==0 else 'gold' if exp_id==1 else 'springgreen')}; 
+                            padding: 10px; border-radius: 10px; text-align: center; height: 100%; box-shadow: 0px 4px 10px rgba(0,0,0,0.3);">
+                    <h5 style="margin: 0; color: white;">Expert {exp_id}</h5>
+                    <p style="margin: 0; font-weight: bold; color: #e0e0e0; font-size: 0.9em;">{color} {regime}</p>
+                </div>
+                """
+                st.markdown(badge_html, unsafe_allow_html=True)
 
             # Interpretability (XAI)
             with st.expander("📊 View Model Logic (Feature Importance)", expanded=True):
@@ -554,3 +628,5 @@ with tab_methodology:
 # --- SIDEBAR FOOTER: Credits ---
 # st.sidebar.markdown('''___''')
 st.sidebar.markdown('##### Data Scientist: Daniel Gomes')
+st.sidebar.markdown('##### [Linkedin](https://www.linkedin.com/in/daniel-asgomes/)')
+                    
