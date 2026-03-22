@@ -4469,7 +4469,22 @@ plotting = ["graphviz", "matplotlib"]
 pyspark = ["cloudpickle", "pyspark (>=3.4)", "scikit-learn"]
 scikit-learn = ["scikit-learn"]
 
+[[package]]
+name = "ytmusicapi"
+version = "1.11.5"
+description = "Unofficial API for YouTube Music"
+optional = false
+python-versions = ">=3.10"
+groups = ["main"]
+files = [
+    {file = "ytmusicapi-1.11.5-py3-none-any.whl", hash = "sha256:f6b1e031408cce45bef207bfda449e3ecf548f7c4ff0c091c575d4a27eb21da6"},
+    {file = "ytmusicapi-1.11.5.tar.gz", hash = "sha256:48f35901291c8af9934ec0aa9cd6b9fd1a19c543f843c39c9e8b396356b47801"},
+]
+
+[package.dependencies]
+requests = ">=2.22"
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10"
-content-hash = "a0401a6e6017f49e7981629c5e6e0249d4c90d81c2bd5e646476cc37333b7a73"
+content-hash = "753d2442274e3927e866a83f9f836304599eed082199f6a7b72eb34d19c6bb3c"

@@ -24,6 +24,7 @@ musicbrainzngs = "^0.7.1"
 urllib3 = "^2.6.3"
 certifi = "^2026.2.25"
 plotly = "^6.6.0"
+ytmusicapi = "^1.11.5"
 
 [tool.poetry.group.dev.dependencies]
 jupyterlab = ">=4.5.3,<5.0.0"
