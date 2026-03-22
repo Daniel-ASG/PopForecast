@@ -198,33 +198,14 @@ def init_sandbox(tier):
 
 active_payload = st.session_state.live_payload if app_mode == "Live Search" else st.session_state.sandbox_payload
 
-tab_simulator, tab_methodology = st.tabs(["🚀 A&R Simulator", "🧠 Methodology"])
+# --- MAIN TABS ---
+tab_simulator, tab_analytics, tab_methodology = st.tabs([
+    "🚀 A&R Simulator", 
+    "📈 Artist Analytics", 
+    "🧠 Methodology"
+])
 
-with tab_simulator:
-    
-    # # --- EMPTY STATE (BEFORE SEARCH) ---
-    # if not active_payload:
-    #     st.markdown("<br><br>", unsafe_allow_html=True)
-    #     col_center = st.columns([1, 2, 1])[1]
-    #     with col_center:
-    #         if app_mode == "Live Search":
-    #             st.markdown("<h3 style='text-align: center;'>Archeological Extraction & Acoustic DNA</h3>", unsafe_allow_html=True)
-    #             artist_query = st.text_input("Artist:", placeholder="e.g., Antonio Carlos Jobim")
-    #             track_query = st.text_input("Track:", placeholder="e.g., Garota de Ipanema")
-    #             if st.button("🔍 Extract DNA", width='stretch') and artist_query and track_query:
-    #                 perform_search(artist_query, track_query)
-    #                 st.rerun()
-    #         else:
-    #             st.markdown("<h3 style='text-align: center;'>Scenario Designer</h3>", unsafe_allow_html=True)
-    #             tier = st.selectbox("Market Tier Baseline:", ["Cold Start", "Tipping Point", "Mainstream"])
-    #             if st.button("🏗️ Initialize Sandbox", type="primary", width='stretch'):
-    #                 init_sandbox(tier)
-    #                 st.rerun()
-
-    # # --- DASHBOARD LAYOUT (AFTER SEARCH) ---
-    # else:
-    #     af = active_payload["audio_features"]
-        
+with tab_simulator:        
     # ==========================================
     # ROW 1: FLIGHT PANEL (HERO, METRICS & RADAR)
     # Sempre renderiza o grid, com dados ou vazio (Skeleton UI)
@@ -304,10 +285,36 @@ with tab_simulator:
             st.markdown(f"**Artist:** {active_payload['artist']} | **Album:** {active_payload['album']} | **Year:** {year_str}{listen_link}")
             
             # ==========================================
-            # 2. PARTIAL DATA WARNING (FALLBACK UI)
+            # COLLABORATORS NETWORK (RABBIT HOLE)
+            # ==========================================
+            collaborators = active_payload.get("collaborators", [])
+            if collaborators and len(collaborators) > 1:
+                st.markdown("<p style='font-size: 0.85em; color: #a0a0a0; margin-bottom: 5px;'>👥 <b>Collaborators:</b></p>", unsafe_allow_html=True)
+                collab_cols = st.columns(len(collaborators))
+                
+                for idx, collab in enumerate(collaborators):
+                    with collab_cols[idx]:
+                        if collab.get("is_context_target"):
+                            st.markdown(f"<div style='border: 1px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.1); padding: 5px; border-radius: 5px; text-align: center; font-size: 0.8em; color: white;'>✅ {collab['name']}</div>", unsafe_allow_html=True)
+                        else:
+                            # Guest artist (Clickable button to shift context)
+                            if st.button(f"🔍 {collab['name']}", key=f"feat_btn_{collab['id']}_{idx}", use_container_width=True):
+                                with st.spinner(f"Shifting context to {collab['name']}..."):
+                                    
+                                    # Calling the DEFINITIVE backend method name
+                                    res = backend.get_inference_data_by_id(active_payload["rb_track_id"], context_artist_id=collab["id"])
+                                    
+                                    if res.get("success"):
+                                        st.session_state.live_payload = res["inference_payload"]
+                                        lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
+                                        st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
+                                        st.session_state.lastfm_tags = lfm.get("tags", [])
+                                        st.rerun()
+
+            # ==========================================
+            # PARTIAL DATA WARNING (FALLBACK UI)
             # ==========================================
             is_partial_data = active_payload.get("is_partial", False)
-            
             if is_partial_data:
                 isrc_code = active_payload.get("isrc", "Unknown")
                 st.markdown(f"""
@@ -320,7 +327,6 @@ with tab_simulator:
                 """, unsafe_allow_html=True)
 
             # --- STRENGTHENED TRACK IDENTIFICATION & DNA RESET ---
-            # Composite key to detect version changes (Live vs Studio, Remasters, etc.)
             track_unique_key = (
                 str(active_payload.get('title', '')) + 
                 str(active_payload.get('artist', '')) + 
@@ -328,7 +334,7 @@ with tab_simulator:
                 str(active_payload.get('rb_track_id', ''))
             )
             
-            # Initializing or Resetting Slider State if song/version changes or garbage collected
+            # ONLY ONE INITIALIZATION BLOCK NOW!
             if ("loaded_track" not in st.session_state or 
                 st.session_state.loaded_track != track_unique_key or 
                 "sl_auth" not in st.session_state):
@@ -344,32 +350,31 @@ with tab_simulator:
                 st.session_state["sl_loud"] = float(af.get("loudness", -10.0))
                 st.session_state["sl_live"] = float(af.get("liveness", 0.1))
                 
-                # Commit the new key to state
                 st.session_state.loaded_track = track_unique_key
 
             # 3. Model Inference Preparation
             ignore_tags = st.checkbox("🛡️ Ignore Niche Cultural Tags (Anti-Sabotage)")
             df_pred = pd.DataFrame(0.0, index=[0], columns=config.get('features_required', []))
             
-            track_id = active_payload['title'] + active_payload['artist']
+            # track_id = active_payload['title'] + active_payload['artist']
             
-            # ANTI-GARBAGE COLLECTION CHECK:
-            # We verify if 'sl_auth' is missing because Streamlit deletes widget keys when they are hidden (e.g., during an error state)
-            if ("loaded_track" not in st.session_state or 
-                st.session_state.loaded_track != track_id or 
-                "sl_auth" not in st.session_state):
+            # # ANTI-GARBAGE COLLECTION CHECK:
+            # # We verify if 'sl_auth' is missing because Streamlit deletes widget keys when they are hidden (e.g., during an error state)
+            # if ("loaded_track" not in st.session_state or 
+            #     st.session_state.loaded_track != track_id or 
+            #     "sl_auth" not in st.session_state):
                 
-                st.session_state["sl_auth"] = float(active_payload.get("artist_lastfm_listeners_log", 15.0))
-                st.session_state["sl_dance"] = float(af.get("danceability", 0.5))
-                st.session_state["sl_energy"] = float(af.get("energy", 0.5))
-                st.session_state["sl_val"] = float(af.get("valence", 0.5))
-                st.session_state["sl_acous"] = float(af.get("acousticness", 0.5))
-                st.session_state["sl_inst"] = float(af.get("instrumentalness", 0.0))
-                st.session_state["sl_speech"] = float(af.get("speechiness", 0.0))
-                st.session_state["sl_tempo"] = float(af.get("tempo", 120.0))
-                st.session_state["sl_loud"] = float(af.get("loudness", -10.0))
-                st.session_state["sl_live"] = float(af.get("liveness", 0.1))
-                st.session_state.loaded_track = track_id
+            #     st.session_state["sl_auth"] = float(active_payload.get("artist_lastfm_listeners_log", 15.0))
+            #     st.session_state["sl_dance"] = float(af.get("danceability", 0.5))
+            #     st.session_state["sl_energy"] = float(af.get("energy", 0.5))
+            #     st.session_state["sl_val"] = float(af.get("valence", 0.5))
+            #     st.session_state["sl_acous"] = float(af.get("acousticness", 0.5))
+            #     st.session_state["sl_inst"] = float(af.get("instrumentalness", 0.0))
+            #     st.session_state["sl_speech"] = float(af.get("speechiness", 0.0))
+            #     st.session_state["sl_tempo"] = float(af.get("tempo", 120.0))
+            #     st.session_state["sl_loud"] = float(af.get("loudness", -10.0))
+            #     st.session_state["sl_live"] = float(af.get("liveness", 0.1))
+            #     st.session_state.loaded_track = track_id
 
             raw_track = active_payload.get("raw_alternatives", [{}])[0] if active_payload.get("raw_alternatives") else {}
             markets = raw_track.get("availableCountries", "")
@@ -656,7 +661,22 @@ with tab_simulator:
                             st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
                             
                             def format_track_option(track_dict):
-                                return f"{track_dict.get('track_number', '?')}. {track_dict.get('title', '???')}"
+                                t_num = track_dict.get('track_number', '?')
+                                t_title = track_dict.get('title', 'Unknown Track')
+                                t_type = track_dict.get('track_type', 'studio').lower()
+                                
+                                # Visual Tagging (Pseudo-Badges)
+                                badges = {
+                                    "studio": "🎧 [STUDIO]",
+                                    "live": "🎸 [LIVE]",
+                                    "remix": "🎛️ [REMIX]",
+                                    "acoustic": "🪵 [ACOUSTIC]",
+                                    "instrumental": "🎹 [INSTRUMENTAL]",
+                                    "demo": "📝 [DEMO]"
+                                }
+                                badge_str = badges.get(t_type, "🎧 [STUDIO]")
+                                
+                                return f"{t_num}. {badge_str} {t_title}"
 
                             selected_track = st.selectbox(
                                 "Select a track to analyze:", 
@@ -676,25 +696,109 @@ with tab_simulator:
                                     track_title = selected_track.get("title")
                                     
                                     with st.spinner(f"Extracting exact DNA for {track_title}..."):
-                                        # 2. FIXED: Correct backend method name (get_inference_data_by_id)
-                                        res = backend.get_inference_data_by_id(track_id)
+                                        
+                                        # Calling the DEFINITIVE backend method name
+                                        res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
                                         
                                         if res.get("success"):
-                                            # 3. Injecting new payload into the global state
                                             st.session_state.live_payload = res["inference_payload"]
+                                            
+                                            # ==========================================
+                                            # UI TWEAK: ALBUM NAME RESTORATION
+                                            # ==========================================
+                                            if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
+                                                st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
                                             
                                             # Refresh Last.fm Context for the new track
                                             lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
                                             st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
                                             st.session_state.lastfm_tags = lfm.get("tags", [])
                                             
-                                            # Clear any previous search errors
                                             st.session_state.search_error = None
-                                            
-                                            # Trigger full UI reload
                                             st.rerun()
                                         else:
                                             st.error("Could not load track data. Try again.")
+
+
+# --- ANALYTICS TAB ---
+with tab_analytics:
+    if not active_payload or not active_payload.get("rb_artist_id"):
+        st.header("📈 Artist Evolution Tracker")
+        st.markdown("Track the acoustic evolution and energy shifts of the artist across their key discography milestones.")
+        st.info("Please load a track in the Simulator to unlock the Evolution Tracker.")
+    else:
+        current_artist = active_payload.get('artist', 'Unknown Artist')
+        rb_artist_id = active_payload.get("rb_artist_id")
+        
+        st.header(f"📈 {current_artist} | Evolution Tracker")
+        st.markdown(f"Track the acoustic evolution and energy shifts of **{current_artist}** across their key discography milestones.")
+        
+        # ==========================================
+        # STATE CACHE GUARD (PRE-FETCHING UNDER THE HOOD)
+        # ==========================================
+        # We only hit the backend once per artist. This prevents the sliders on the main page from lagging!
+        if st.session_state.get('evo_artist_id') != rb_artist_id:
+            with st.spinner(f"Pre-computing temporal analytics for {current_artist}..."):
+                try:
+                    st.session_state.evo_data = backend.get_artist_evolution(rb_artist_id)
+                    st.session_state.evo_artist_id = rb_artist_id
+                except Exception as e:
+                    st.session_state.evo_data = None
+                    st.session_state.evo_artist_id = rb_artist_id # Set ID anyway to prevent infinite retry loops
+                    st.error(f"Failed to load evolution data: {e}")
+        
+        # ==========================================
+        # INSTANT RENDERING FROM MEMORY
+        # ==========================================
+        evo_data = st.session_state.get('evo_data')
+        
+        if evo_data:
+            df_evo = pd.DataFrame(evo_data)
+            df_evo = df_evo.sort_values(by="year")
+            
+            fig_evo = go.Figure()
+            
+            metrics = {
+                "avg_energy": ("⚡ Energy", "#ff4b4b"),
+                "avg_acousticness": ("🎸 Acousticness", "#00ff7f"),
+                "avg_valence": ("😊 Valence (Mood)", "#ffd700"),
+                "avg_danceability": ("🕺 Danceability", "#1e90ff")
+            }
+            
+            for col, (label, color) in metrics.items():
+                if col in df_evo.columns:
+                    fig_evo.add_trace(go.Scatter(
+                        x=df_evo['year'], 
+                        y=df_evo[col], 
+                        mode='lines+markers',
+                        name=label,
+                        line=dict(color=color, width=3),
+                        marker=dict(size=8),
+                        text=df_evo.get('key_album', ''),
+                        hovertemplate="<b>%{x}</b><br>Album: <i>%{text}</i><br>Value: %{y:.2f}<extra></extra>"
+                    ))
+
+            fig_evo.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)', 
+                paper_bgcolor='rgba(0,0,0,0)',
+                xaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', title="Release Year"),
+                yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)', title="Acoustic Value (0 to 1)", range=[0, 1]),
+                legend=dict(
+                    orientation="v", 
+                    yanchor="top", 
+                    y=1, 
+                    xanchor="left", 
+                    x=1.02,
+                    bgcolor="rgba(0,0,0,0)"
+                ),
+                height=500,
+                margin=dict(l=20, r=20, t=50, b=20)
+            )
+            
+            st.plotly_chart(fig_evo, use_container_width=True, config={'displayModeBar': False})
+            
+        elif st.session_state.get('evo_artist_id') == rb_artist_id and not evo_data:
+            st.warning(f"Not enough temporal data to generate an evolution timeline for {current_artist}.")
 
 
 # --- METHODOLOGY TAB ---
