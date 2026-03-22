@@ -350,23 +350,50 @@ class PopForecastInferenceBackend:
         return ""
     
 
-    def get_inference_by_rb_id(self, track_id: str) -> Dict[str, Any]:
-        """ Fetches full A&R data directly using a ReccoBeats Track ID, bypassing textual search. """
+    def get_inference_by_rb_id(self, track_id: str, context_artist_id: str = None) -> dict:
+        """ 
+        Fetches full A&R data directly using a ReccoBeats Track ID.
+        Dynamically adjusts the primary artist focus based on the context_artist_id.
+        """
+        import time
         start_ts = time.time()
         
-        # 1. Busca os dados brutos da música direto pelo ID
+        # 1. Fetch raw track data via ID
         track_data = self._request_json(f"{self.rb_url}/track/{track_id}", self.rb_headers)
         
         if "_error" in track_data or not track_data:
+            if hasattr(self, 'logger'):
+                self.logger.error(f"Failed to fetch track ID {track_id}")
             return {"success": False, "error": f"Failed to fetch track ID {track_id}"}
             
-        # 2. Extrai os metadados
+        # 2. Extract core metadata
         title = track_data.get("trackTitle", track_data.get("name", "Unknown"))
         
-        artist_name = "Unknown"
-        if track_data.get("artists"):
-            artist_name = track_data["artists"][0].get("name", "Unknown")
+        # --- RELATIVE CONTEXT LOGIC ---
+        collaborators = []
+        raw_artists = track_data.get("artists", [])
+        
+        for art in raw_artists:
+            art_id = art.get("id", "")
+            collaborators.append({
+                "name": art.get("name", "Unknown"),
+                "id": art_id,
+                # Flags True if this artist is the one currently being analyzed in the UI
+                "is_context_target": (art_id == context_artist_id) if context_artist_id else False
+            })
             
+        # Determine the main artist name to display in the Hero Card.
+        # It prioritizes the context artist; falls back to the API's first artist if no context is provided.
+        display_artist_name = "Unknown"
+        if collaborators:
+            display_artist_name = collaborators[0]["name"] 
+            if context_artist_id:
+                for collab in collaborators:
+                    if collab["is_context_target"]:
+                        display_artist_name = collab["name"]
+                        break
+        # ------------------------------
+        
         album_name = "Unknown Album"
         release_year = float(time.localtime().tm_year)
         if track_data.get("album"):
@@ -378,14 +405,12 @@ class PopForecastInferenceBackend:
         popularity = int(track_data.get("popularity", 0))
         isrc = track_data.get("isrc", "")
         
-        # 3. Pega os atributos de áudio (DNA)
+        # 3. Fetch and parse acoustic DNA
         audio_features = track_data.get("audioFeatures")
         if not audio_features:
-            # Fallback se a API não retornar na primeira chamada, buscamos especificamente
             feature_res = self._request_json(f"{self.rb_url}/track/{track_id}/audio-features", self.rb_headers)
             audio_features = feature_res if "_error" not in feature_res else None
             
-        # O mesmo parser que já usamos no motor principal
         parsed_features = {
             "danceability": 0.5, "energy": 0.5, "valence": 0.5, "acousticness": 0.5,
             "instrumentalness": 0.0, "speechiness": 0.05, "tempo": 120.0,
@@ -401,17 +426,18 @@ class PopForecastInferenceBackend:
             "success": True,
             "inference_payload": {
                 "title": title,
-                "artist": artist_name,
+                "artist": display_artist_name,
+                "collaborators": collaborators, 
                 "album": album_name,
                 "original_release_year": release_year,
                 "real_market_popularity": popularity,
                 "audio_features": parsed_features,
                 "execution_time": round(time.time() - start_ts, 2),
-                "raw_alternatives": [track_data], # Passa a própria faixa como alternativa
+                "raw_alternatives": [track_data],
                 "link": track_data.get("href", ""),
                 "isrc": isrc,
                 "is_partial": not bool(audio_features),
-                "rb_artist_id": track_data.get("artistId", "")
+                "rb_artist_id": context_artist_id if context_artist_id else track_data.get("artistId", "")
             }
         }
 
@@ -464,8 +490,7 @@ class PopForecastInferenceBackend:
         return sorted_albums
 
     def get_rb_album_tracks(self, album_id: str) -> List[Dict]:
-        """ Fetches the tracklist for a specific ReccoBeats album. """
-        # Endpoint CORRIGIDO conforme documentação oficial: /v1/album/:id/track
+        """ Fetches the tracklist for a specific ReccoBeats album and injects track types. """
         data = self._request_json(f"{self.rb_url}/album/{album_id}/track", self.rb_headers, {"limit": 50})
         
         items = data.get("content") or data.get("items") or []
@@ -473,31 +498,111 @@ class PopForecastInferenceBackend:
             
         tracks = []
         for track in items:
+            title = track.get("trackTitle", track.get("name", "Unknown Track"))
+            t_lower = title.lower()
+            
+            # --- MOTOR HEURÍSTICO DE TAGS ---
+            track_type = "studio"
+            if "live" in t_lower or "ao vivo" in t_lower:
+                track_type = "live"
+            elif "remix" in t_lower or "mix" in t_lower:
+                track_type = "remix"
+            elif "acoustic" in t_lower or "acústico" in t_lower or "unplugged" in t_lower:
+                track_type = "acoustic"
+            elif "instrumental" in t_lower:
+                track_type = "instrumental"
+            elif "demo" in t_lower:
+                track_type = "demo"
+            # --------------------------------
+                
             tracks.append({
                 "id": track.get("id"),
-                "title": track.get("trackTitle", track.get("name", "Unknown Track")),
-                "track_number": track.get("trackNumber", track.get("track_number", 0))
+                "title": title,
+                "track_number": track.get("trackNumber", track.get("track_number", 0)),
+                "track_type": track_type # <--- CONTRATO NOVO ENTREGUE
             })
             
         return sorted(tracks, key=lambda x: x["track_number"])
+    
+    def get_artist_evolution(self, artist_id: str) -> List[Dict]:
+        """ 
+        Aggregates acoustic DNA over time by sampling the most popular album per year.
+        Returns a time-series ready for Plotly rendering.
+        """
+        if not artist_id: return []
+        
+        # 1. Pega o catálogo completo limpo e deduplicado
+        catalog = self.get_rb_artist_catalog(artist_id)
+        if not catalog: return []
+        
+        # 2. Agrupa pelo ano e guarda apenas o álbum MAIS POPULAR daquele ano
+        best_album_per_year = {}
+        for alb in catalog:
+            year = alb.get("year", "0000")
+            if year == "0000": continue
+            
+            pop = alb.get("popularity", 0)
+            if year not in best_album_per_year or pop > best_album_per_year[year]["popularity"]:
+                best_album_per_year[year] = alb
+                
+        # 3. Extração em lote do DNA (Amostragem: primeira faixa do álbum mais popular)
+        evolution_series = []
+        # Ordenar cronologicamente do mais antigo para o mais novo
+        sorted_years = sorted(best_album_per_year.keys())
+        
+        for year in sorted_years:
+            album = best_album_per_year[year]
+            tracks = self.get_rb_album_tracks(album["id"])
+            
+            if not tracks: continue
+            
+            # Pega a faixa 1 para representar a sonoridade do álbum
+            target_track_id = tracks[0]["id"]
+            
+            # Usa o nosso método blindado para pegar o DNA
+            track_data = self.get_inference_by_rb_id(target_track_id)
+            if not track_data.get("success"): continue
+            
+            features = track_data["inference_payload"]["audio_features"]
+            
+            # Montando o contrato exigido pelo Front-End
+            evolution_series.append({
+                "year": int(year),
+                "key_album": album["title"],
+                "avg_energy": features.get("energy", 0),
+                "avg_acousticness": features.get("acousticness", 0),
+                "avg_valence": features.get("valence", 0),
+                "avg_danceability": features.get("danceability", 0)
+            })
+            
+        return evolution_series
+    
+
+
 
     # =====================================================================
     # MODO DIRETO: Inferência Imediata via ID (Bypass absoluto)
     # =====================================================================
-    def get_inference_data_by_id(self, track_id: str) -> Dict:
-        """ Direct DNA extraction using a known Track ID (Zero heuristics). """
+    def get_inference_data_by_id(self, track_id: str, context_artist_id: str = None) -> Dict:
+        """ 
+        Direct DNA extraction using a known Track ID (Zero heuristics). 
+        Dynamically adjusts the primary artist focus based on the context_artist_id.
+        """
         start_ts = time.time()
         
+        # 1. Fetch Track Data
         track_data = self._request_json(f"{self.rb_url}/track/{track_id}", self.rb_headers)
         if "content" in track_data: track_data = track_data["content"]
         if "_error" in track_data: return {"success": False, "error": "Track not found in RB"}
         
+        # 2. Fetch Audio Features
         raw_features = self._request_json(f"{self.rb_url}/track/{track_id}/audio-features", self.rb_headers)
         audio_features = {}
         if "_error" not in raw_features:
             keys = ["id", "isrc", "danceability", "energy", "key", "loudness", "mode", "speechiness", "acousticness", "instrumentalness", "liveness", "valence", "tempo"]
             audio_features = {k: raw_features.get(k) for k in keys if k in raw_features}
             
+        # 3. Fetch Album Data
         album_payload = self._request_json(f"{self.rb_url}/track/{track_id}/album", self.rb_headers)
         final_album = "Unknown Album"
         release_year = "0000"
@@ -506,15 +611,35 @@ class PopForecastInferenceBackend:
             final_album = best_album.get("name", "Unknown Album")
             release_year = str(best_album.get("releaseDate", "0000"))[:4]
 
-        final_artist = track_data.get("artistName", "")
-        if not final_artist and track_data.get("artists"):
-            final_artist = track_data["artists"][0].get("name", "")
+        # --- NEW COLLABORATORS LOGIC ---
+        collaborators = []
+        raw_artists = track_data.get("artists", [])
+        
+        for art in raw_artists:
+            art_id = art.get("id", "")
+            collaborators.append({
+                "name": art.get("name", "Unknown"),
+                "id": art_id,
+                "is_context_target": (str(art_id) == str(context_artist_id)) if context_artist_id else False
+            })
+            
+        # Determine the main artist name to display in the Hero Card
+        display_artist_name = "Unknown"
+        if collaborators:
+            display_artist_name = collaborators[0]["name"] 
+            if context_artist_id:
+                for collab in collaborators:
+                    if collab["is_context_target"]:
+                        display_artist_name = collab["name"]
+                        break
+        # -------------------------------
 
         return {
             "success": True,
             "inference_payload": {
                 "title": track_data.get("trackTitle", track_data.get("name")),
-                "artist": final_artist,
+                "artist": display_artist_name,
+                "collaborators": collaborators,
                 "album": final_album,
                 "original_release_year": int(release_year) if release_year.isdigit() else float(time.localtime().tm_year),
                 "real_market_popularity": int(track_data.get("popularity", 0)),
@@ -523,7 +648,7 @@ class PopForecastInferenceBackend:
                 "raw_alternatives": [track_data], 
                 "link": track_data.get("href", ""),
                 "isrc": track_data.get("isrc", "Unknown"),
-                "is_partial": False,
-                "rb_artist_id": track_data.get("artists", [{}])[0].get("id", "") if track_data.get("artists") else ""
+                "is_partial": not bool(audio_features),
+                "rb_artist_id": context_artist_id if context_artist_id else (raw_artists[0].get("id", "") if raw_artists else "")
             }
         }
