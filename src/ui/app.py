@@ -121,6 +121,32 @@ def get_backend():
 
 backend = get_backend()
 
+# ==========================================
+# CACHE LAYER (Performance & API Savings)
+# ==========================================
+# We disable the internal spinner (show_spinner=False) because our UI already 
+# uses highly contextual st.spinner() blocks for a better UX.
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_get_inference_data(artist, track, album_name=None):
+    return backend.get_inference_data(artist, track, album_name=album_name)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_get_inference_data_by_id(track_id, context_artist_id=None):
+    return backend.get_inference_data_by_id(track_id, context_artist_id=context_artist_id)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_get_rb_artist_catalog(artist_id):
+    return backend.get_rb_artist_catalog(artist_id)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_get_rb_album_tracks(album_id):
+    return backend.get_rb_album_tracks(album_id)
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_build_curator_menu(raw_alternatives):
+    return backend.build_curator_menu(raw_alternatives)
+
 LASTFM_API_KEY = st.secrets.get("LASTFM_API_KEY", "YOUR_LASTFM_KEY")
 
 def get_lastfm_data(artist_name: str) -> dict:
@@ -162,21 +188,57 @@ if "live_payload" not in st.session_state: st.session_state.live_payload = None
 if "sandbox_payload" not in st.session_state: st.session_state.sandbox_payload = None
 if "lastfm_tags" not in st.session_state: st.session_state.lastfm_tags = []
 if "search_error" not in st.session_state: st.session_state.search_error = None # <-- NOVA LINHA
+if "search_warning" not in st.session_state: st.session_state.search_warning = None
 
 def perform_search(artist, track, album=None):
-    # UX Tweak: The spinner now shows if it's doing an exact album search or a general search
-    msg = f"Extracting exact DNA for {track} ({album}) from MusicBrainz and running market analysis... (~25s)..." if album else f"Extracting exact DNA for {track} from MusicBrainz and running market analysis... (~25s)"
+    msg = f"Extracting exact DNA for [{track} ({album})] from MusicBrainz and running market analysis... (~25s)..." if album else f"Extracting exact DNA for [{track}] from MusicBrainz and running market analysis... (~25s)"
+    
     with st.spinner(msg):
-        res = backend.get_inference_data(artist, track, album_name=album)
-        if res["success"]:
+        res = cached_get_inference_data(artist, track, album_name=album)
+        
+        # ==========================================
+        # 1. GRACEFUL DEGRADATION (ARTIST FALLBACK)
+        # ==========================================
+        if res.get("success") and res.get("is_artist_only_fallback"):
+            st.session_state.live_payload = None 
+            st.session_state.search_error = None
+            st.session_state.search_warning = res.get("message", f"Track not found. Routing to {res['artist_fallback_data']['name']}'s catalog.")
+            
+            # Auto-trigger Catalog
+            st.session_state['catalog_selected_artist'] = res['artist_fallback_data']['name']
+            st.session_state['catalog_selected_artist_id'] = res['artist_fallback_data']['id']
+            st.session_state['catalog_albums'] = None
+            st.session_state['current_album_tracks'] = None
+            st.session_state['auto_load_catalog'] = True
+            return # Sai da função para não dar erro
+        
+        # ==========================================
+        # 2. SUCCESS: UPGRADING THE PAYLOAD
+        # ==========================================
+        elif res.get("success"):
+            track_id = res["inference_payload"].get("rb_track_id")
+            
+            if track_id:
+                rich_res = cached_get_inference_data_by_id(track_id)
+                if rich_res.get("success"):
+                    res = rich_res 
+            
             st.session_state.live_payload = res["inference_payload"]
-            lfm_data = get_lastfm_data(st.session_state.live_payload["artist"])
-            st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm_data["listeners_log"]
+            
+            lfm_data = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
+            st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm_data.get("listeners_log", 15.0)
             st.session_state.lastfm_tags = lfm_data.get("tags", [])
-            st.session_state.search_error = None # Limpa erros anteriores
+            
+            st.session_state.search_error = None
+            st.session_state.search_warning = None
+            
+        # ==========================================
+        # 3. TOTAL FAILURE (Backend found nothing)
+        # ==========================================
         else:
             st.session_state.live_payload = None
             st.session_state.search_error = "Track not found. Please verify the spelling or try another song."
+            st.session_state.search_warning = None
 
 def init_sandbox(tier):
     base_pop = {"Cold Start": 25, "Tipping Point": 60, "Mainstream": 85}[tier]
@@ -218,15 +280,34 @@ with tab_simulator:
         if app_mode == "Live Search":
             artist_q = st.text_input("Artist:", placeholder="e.g., Stan Getz", key="search_art")
             track_q = st.text_input("Track:", placeholder="e.g., The Girl...", key="search_trk")
+            
             if st.button("Extract DNA", width='stretch') and artist_q and track_q:
-                perform_search(artist_q, track_q)
-                st.rerun()
+                st.session_state.live_payload = None
+                st.session_state.search_error = None
+                st.session_state.search_warning = None
+                st.session_state.pending_artist = artist_q
+                st.session_state.pending_track = track_q
+                st.session_state.is_searching = True
+                st.rerun() 
                 
-            # Renderização de Feedback de Erro de Busca
-            if st.session_state.search_error:
+            if st.session_state.get("is_searching"):
+                st.session_state.is_searching = False 
+                perform_search(st.session_state.pending_artist, st.session_state.pending_track)
+                st.rerun() 
+
+            # Renderização ÚNICA de Erro (Vermelho)
+            if st.session_state.get("search_error"):
                 st.markdown(f"""
                 <div style='background-color: rgba(255, 75, 75, 0.1); border-left: 3px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-top: 10px;'>
                     <p style='color: #ff4b4b; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_error}</p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+            # Renderização ÚNICA de Fallback (Laranja)
+            elif st.session_state.get("search_warning"):
+                st.markdown(f"""
+                <div style='background-color: rgba(255, 170, 0, 0.1); border-left: 3px solid #ffaa00; padding: 10px; border-radius: 4px; margin-top: 10px;'>
+                    <p style='color: #ffaa00; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_warning}</p>
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -285,31 +366,43 @@ with tab_simulator:
             st.markdown(f"**Artist:** {active_payload['artist']} | **Album:** {active_payload['album']} | **Year:** {year_str}{listen_link}")
             
             # ==========================================
-            # COLLABORATORS NETWORK (RABBIT HOLE)
+            # COLLABORATORS NETWORK (CATALOG TRIGGER)
             # ==========================================
             collaborators = active_payload.get("collaborators", [])
-            if collaborators and len(collaborators) > 1:
+            if collaborators:
                 st.markdown("<p style='font-size: 0.85em; color: #a0a0a0; margin-bottom: 5px;'>👥 <b>Collaborators:</b></p>", unsafe_allow_html=True)
                 collab_cols = st.columns(len(collaborators))
                 
+                # Identify if any collaborator is explicitly flagged as the context target
+                has_target = any(c.get("is_context_target") for c in collaborators)
+
                 for idx, collab in enumerate(collaborators):
                     with collab_cols[idx]:
-                        if collab.get("is_context_target"):
-                            st.markdown(f"<div style='border: 1px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.1); padding: 5px; border-radius: 5px; text-align: center; font-size: 0.8em; color: white;'>✅ {collab['name']}</div>", unsafe_allow_html=True)
+                        # CONCEPTUAL FIX: The primary artist is the one flagged OR the first one if no context exists
+                        is_primary = collab.get("is_context_target") or (idx == 0 and not has_target)
+                        
+                        if is_primary:
+                            # 1. Primary Artist: Static Badge (Non-clickable to avoid redundancy)
+                            st.markdown(f"<div style='border: 1px solid #ff4b4b; background-color: rgba(255, 75, 75, 0.1); padding: 5px; border-radius: 5px; text-align: center; font-size: 0.8em; color: white;'>✅ {collab.get('name', 'Unknown')}</div>", unsafe_allow_html=True)
                         else:
-                            # Guest artist (Clickable button to shift context)
-                            if st.button(f"🔍 {collab['name']}", key=f"feat_btn_{collab['id']}_{idx}", use_container_width=True):
-                                with st.spinner(f"Shifting context to {collab['name']}..."):
-                                    
-                                    # Calling the DEFINITIVE backend method name
-                                    res = backend.get_inference_data_by_id(active_payload["rb_track_id"], context_artist_id=collab["id"])
-                                    
-                                    if res.get("success"):
-                                        st.session_state.live_payload = res["inference_payload"]
-                                        lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
-                                        st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
-                                        st.session_state.lastfm_tags = lfm.get("tags", [])
-                                        st.rerun()
+                            # 2. Guest Artist: Trigger discography in the basement and clean the top DNA extractor
+                            collab_name = collab.get('name', 'Guest')
+                            collab_id = collab.get('id')
+                            
+                            if st.button(f"📂 {collab_name}", key=f"feat_cat_{collab_id}_{idx}", width='stretch', help=f"View {collab_name}'s full discography below"):
+                                # STEP A: Clean the top extractor (Awaiting Track Selection state)
+                                st.session_state.live_payload = None
+                                
+                                # STEP B: Prepare the Catalog Explorer for the new artist
+                                st.session_state['catalog_selected_artist'] = collab_name
+                                st.session_state['catalog_selected_artist_id'] = collab_id
+                                st.session_state['catalog_albums'] = None
+                                st.session_state['current_album_tracks'] = None
+                                
+                                # STEP C: Set flag to auto-load the discography when the page reruns
+                                st.session_state['auto_load_catalog'] = True
+                                
+                                st.rerun()
 
             # ==========================================
             # PARTIAL DATA WARNING (FALLBACK UI)
@@ -575,7 +668,7 @@ with tab_simulator:
                 st.markdown("Deep search for Remasters, Acoustics, and Live versions.")
                 if st.button("Trigger Deep Search"):
                     with st.spinner("Handling API rate limits and building the menu — this may take a few seconds."):
-                        menu = backend.build_curator_menu(active_payload.get("raw_alternatives", []))
+                        menu = cached_build_curator_menu(active_payload.get("raw_alternatives", []))
                         if menu:
                             df_menu = pd.DataFrame(menu)
                             styled_df = df_menu[['popularity', 'title', 'album', 'year', 'isrc', 'link']].style.background_gradient(cmap='Reds', subset=['popularity'])
@@ -594,44 +687,64 @@ with tab_simulator:
     # ==========================================
     # ARTIST CATALOG EXPLORER (HYBRID UX)
     # ==========================================
-    if active_payload:
-        with st.expander("🗂️ Artist Catalog Explorer"):
-            current_artist = active_payload.get('artist', 'Unknown Artist')
-            rb_artist_id = active_payload.get("rb_artist_id")
+    # This block displays if a track is loaded OR if a collaborator's catalog was triggered.
+    if active_payload or st.session_state.get('catalog_selected_artist_id'):
+        
+        # Determine if we should expand the drawer automatically (e.g., after clicking a feat)
+        is_expanded = st.session_state.get('auto_load_catalog', False)
+        
+        with st.expander("🗂️ Artist Catalog Explorer", expanded=is_expanded):
             
+            # 1. Resolve Artist Context
+            # We prioritize the collaborator trigger from the Hero Card if it exists
+            if st.session_state.get('catalog_selected_artist_id'):
+                current_artist = st.session_state['catalog_selected_artist']
+                rb_artist_id = st.session_state['catalog_selected_artist_id']
+            else:
+                current_artist = active_payload.get('artist', 'Unknown Artist')
+                rb_artist_id = active_payload.get("rb_artist_id")
+
             if not rb_artist_id:
                 st.info(f"Catalog exploration is currently unavailable for {current_artist}.")
             else:
                 st.markdown(f"Explore **{current_artist}**'s full discography and album tracks.")
 
-                # 1. Load Catalog (Initial Trigger)
-                load_catalog_btn = st.button(
-                    f"Load {current_artist}'s Full Discography", 
-                    use_container_width=True, 
-                    key="cat_load_btn"
-                )
-
-                if load_catalog_btn:
-                    with st.spinner(f"Fetching discography..."):
-                        try:
-                            albums = backend.get_rb_artist_catalog(rb_artist_id)
+                # 2. AUTO-LOAD LOGIC (Triggered by Collaborator Click)
+                if st.session_state.get('auto_load_catalog') and not st.session_state.get('catalog_albums'):
+                    try:
+                        with st.spinner(f"Loading {current_artist}'s catalog..."):
+                            albums = cached_get_rb_artist_catalog(rb_artist_id)
                             if albums:
                                 st.session_state['catalog_albums'] = albums
-                                st.session_state['catalog_selected_artist'] = current_artist
-                                st.session_state['current_album_tracks'] = None 
+                                st.session_state['auto_load_catalog'] = False # Reset trigger after success
                             else:
                                 st.warning(f"No albums found for {current_artist}.")
-                        except Exception as e:
-                            st.error(f"Catalog search failed: {e}")
+                    except Exception as e:
+                        st.error(f"Catalog search failed: {e}")
 
-                # 2. Album Selection (Reactive - No button needed)
-                if (st.session_state.get('catalog_albums') and 
-                    st.session_state.get('catalog_selected_artist') == current_artist):
-                    
+                # 3. MANUAL LOAD BUTTON (Initial State / Fallback)
+                if not st.session_state.get('catalog_albums') or st.session_state.get('catalog_selected_artist') != current_artist:
+                    if st.button(f"Load {current_artist}'s Full Discography", width='stretch', key="cat_load_btn"):
+                        with st.spinner(f"Fetching discography..."):
+                            try:
+                                albums = cached_get_rb_artist_catalog(rb_artist_id)
+
+                                if albums:
+                                    st.session_state['catalog_albums'] = albums
+                                    st.session_state['catalog_selected_artist'] = current_artist
+                                    st.session_state['current_album_tracks'] = None 
+                                    st.rerun()
+                                else:
+                                    st.warning(f"No albums found for {current_artist}.")
+                            except Exception as e:
+                                st.error(f"Catalog search failed: {e}")
+
+                # 4. ALBUM SELECTION (Reactive)
+                if st.session_state.get('catalog_albums') and st.session_state.get('catalog_selected_artist') == current_artist:
                     st.divider()
                     
                     def format_album_option(album_dict):
-                        return f"{album_dict.get('title', '???')} ({album_dict.get('year', '????')})"
+                        return f"({album_dict.get('year', '????')}) - {album_dict.get('title', '???')}"
 
                     selected_album = st.selectbox(
                         "Select Album:", 
@@ -646,78 +759,65 @@ with tab_simulator:
                         album_id = selected_album.get("id")
                         album_title = selected_album.get("title")
                         
-                        # Only fetch tracks if the selection changed
+                        # Fetch tracks only if selection changed
                         if st.session_state.get('current_album_name') != album_title:
                             with st.spinner(f"Loading tracks..."):
                                 try:
-                                    tracks = backend.get_rb_album_tracks(album_id)
+                                    tracks = cached_get_rb_album_tracks(album_id)
                                     st.session_state['current_album_tracks'] = tracks
                                     st.session_state['current_album_name'] = album_title
                                 except Exception as e:
                                     st.error(f"Failed to load tracks: {e}")
 
-                    # 3. Track Selection & Explicit Analyze Button
-                        if st.session_state.get('current_album_tracks'):
-                            st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
+                    # 5. TRACK SELECTION & ANALYSIS
+                    if st.session_state.get('current_album_tracks'):
+                        st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
+                        
+                        def format_track_option(track_dict):
+                            t_num = track_dict.get('track_number', '?')
+                            t_title = track_dict.get('title', 'Unknown')
+                            t_type = track_dict.get('track_type', 'studio').lower()
                             
-                            def format_track_option(track_dict):
-                                t_num = track_dict.get('track_number', '?')
-                                t_title = track_dict.get('title', 'Unknown Track')
-                                t_type = track_dict.get('track_type', 'studio').lower()
-                                
-                                # Visual Tagging (Pseudo-Badges)
-                                badges = {
-                                    "studio": "🎧 [STUDIO]",
-                                    "live": "🎸 [LIVE]",
-                                    "remix": "🎛️ [REMIX]",
-                                    "acoustic": "🪵 [ACOUSTIC]",
-                                    "instrumental": "🎹 [INSTRUMENTAL]",
-                                    "demo": "📝 [DEMO]"
-                                }
-                                badge_str = badges.get(t_type, "🎧 [STUDIO]")
-                                
-                                return f"{t_num}. {badge_str} {t_title}"
+                            badges = {
+                                "studio": "🎧 [STUDIO]", "live": "🎸 [LIVE]", "remix": "🎛️ [REMIX]",
+                                "acoustic": "🪵 [ACOUSTIC]", "instrumental": "🎹 [INSTRUMENTAL]", "demo": "📝 [DEMO]"
+                            }
+                            return f"{t_num}. {badges.get(t_type, '🎧 [STUDIO]')} {t_title}"
 
-                            selected_track = st.selectbox(
-                                "Select a track to analyze:", 
-                                options=st.session_state['current_album_tracks'],
-                                format_func=format_track_option,
-                                index=None,
-                                placeholder="Choose a track...",
-                                key="cat_track_sel"
-                            )
-                            
-                            # THE "CIRCUIT BREAKER" BUTTON
-                            if selected_track:
-                                if st.button("🚀 Analyze Selected Track", type="primary", use_container_width=True, key="cat_final_load"):
+                        selected_track = st.selectbox(
+                            "Select a track to analyze:", 
+                            options=st.session_state['current_album_tracks'],
+                            format_func=format_track_option,
+                            index=None,
+                            placeholder="Choose a track...",
+                            key="cat_track_sel"
+                        )
+                        
+                        if selected_track:
+                            if st.button("🚀 Analyze Selected Track", type="primary", width='stretch', key="cat_final_load"):
+                                track_id = selected_track.get("id")
+                                track_title = selected_track.get("title")
+                                
+                                with st.spinner(f"Extracting exact DNA for <{track_title}>..."):
+                                    # Passing rb_artist_id as context to ensure correct artist focus in Hero Card
+                                    res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
                                     
-                                    # 1. Secure ID Extraction
-                                    track_id = selected_track.get("id")
-                                    track_title = selected_track.get("title")
-                                    
-                                    with st.spinner(f"Extracting exact DNA for {track_title}..."):
+                                    if res.get("success"):
+                                        st.session_state.live_payload = res["inference_payload"]
                                         
-                                        # Calling the DEFINITIVE backend method name
-                                        res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
+                                        # UI TWEAK: Restore album name from session if missing in payload
+                                        if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
+                                            st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
                                         
-                                        if res.get("success"):
-                                            st.session_state.live_payload = res["inference_payload"]
-                                            
-                                            # ==========================================
-                                            # UI TWEAK: ALBUM NAME RESTORATION
-                                            # ==========================================
-                                            if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
-                                                st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
-                                            
-                                            # Refresh Last.fm Context for the new track
-                                            lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
-                                            st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
-                                            st.session_state.lastfm_tags = lfm.get("tags", [])
-                                            
-                                            st.session_state.search_error = None
-                                            st.rerun()
-                                        else:
-                                            st.error("Could not load track data. Try again.")
+                                        # Refresh Last.fm Context
+                                        lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
+                                        st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
+                                        st.session_state.lastfm_tags = lfm.get("tags", [])
+                                        
+                                        st.session_state.search_error = None
+                                        st.rerun()
+                                    else:
+                                        st.error("Could not load track data. Try again.")
 
 
 # --- ANALYTICS TAB ---
@@ -795,7 +895,7 @@ with tab_analytics:
                 margin=dict(l=20, r=20, t=50, b=20)
             )
             
-            st.plotly_chart(fig_evo, use_container_width=True, config={'displayModeBar': False})
+            st.plotly_chart(fig_evo, width='stretch', config={'displayModeBar': False})
             
         elif st.session_state.get('evo_artist_id') == rb_artist_id and not evo_data:
             st.warning(f"Not enough temporal data to generate an evolution timeline for {current_artist}.")
