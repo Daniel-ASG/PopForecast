@@ -67,16 +67,24 @@ class PopForecastInferenceBackend:
     # =====================================================================
     # MODO DEFAULT (RÁPIDO): Apenas a Bala de Prata
     # =====================================================================
-    def get_inference_data(self, artist_name: str, track_title: str, album_name: str = None, debug: bool = False) -> Dict:
+    def get_inference_data(self, artist_name: str, track_title: str, album_name: str = "", context_artist_id: str = None) -> dict:
+        """
+        Fetches A&R data via textual search using MusicBrainz heuristics.
+        Includes a YTMusic Bridge (Plan B) and Graceful Degradation (Plan C).
+        Acts as a resolver that delegates final payload construction.
+        """
+        import time
+        import logging
         start_ts = time.time()
         
-        # Se recebemos um álbum (vindo do Curator Menu), fazemos um "Sniper Shot"
+        # ---------------------------------------------------------
+        # PLAN A: MusicBrainz Heuristics
+        # ---------------------------------------------------------
         if album_name:
             queries = [
                 f'recording:"{track_title}" AND artist:"{artist_name}" AND release:"{album_name}"',
                 f'"{artist_name}" "{track_title}" "{album_name}"'
             ]
-        # Busca normal ampla
         else:
             queries = [
                 f'recording:"{track_title}" AND artist:"{artist_name}" AND status:official',
@@ -88,33 +96,32 @@ class PopForecastInferenceBackend:
             data = self._request_json(f"{self.mb_url}/recording", self.mb_headers, {"query": q, "fmt": "json", "limit": 100}, True)
             if "_error" not in data: all_recs.extend(data.get("recordings", []))
 
-        if not all_recs: return {"success": False, "error": "MusicBrainz Connection Fail"}
-
         seen_ids, candidates = set(), []
         oldest_year = 2099
         t_norm, a_norm = self._normalize(track_title), self._normalize(artist_name)
 
-        for r in all_recs:
-            rid = r['id']
-            if rid in seen_ids: continue
-            seen_ids.add(rid)
-            
-            rt = self._normalize(r.get("title", ""))
-            ra = self._normalize(" ".join([ac.get("name", "") for ac in r.get("artist-credit", [])]))
-            
-            if t_norm in rt and any(tok in ra for tok in a_norm.split()):
-                y = r.get("first-release-date", "")[:4]
-                if y.isdigit(): oldest_year = min(oldest_year, int(y))
+        if all_recs:
+            for r in all_recs:
+                rid = r['id']
+                if rid in seen_ids: continue
+                seen_ids.add(rid)
                 
-                score = int(r.get("score", 0))
-                if "live" in rt or "live" in r.get("disambiguation", "").lower():
-                    if "live" not in t_norm: score -= 5000
+                rt = self._normalize(r.get("title", ""))
+                ra = self._normalize(" ".join([ac.get("name", "") for ac in r.get("artist-credit", [])]))
                 
-                rc = int(r.get("release-count", len(r.get("releases", []))) or 0)
-                candidates.append((score + (rc * 10), r)) 
+                if t_norm in rt and any(tok in ra for tok in a_norm.split()):
+                    y = r.get("first-release-date", "")[:4]
+                    if y.isdigit(): oldest_year = min(oldest_year, int(y))
+                    
+                    score = int(r.get("score", 0))
+                    if "live" in rt or "live" in r.get("disambiguation", "").lower():
+                        if "live" not in t_norm: score -= 5000
+                    
+                    rc = int(r.get("release-count", len(r.get("releases", []))) or 0)
+                    candidates.append((score + (rc * 10), r)) 
 
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        
+            candidates.sort(key=lambda x: x[0], reverse=True)
+            
         isrcs = set()
         for _, rec in candidates[:15]: 
             data = self._request_json(f"{self.mb_url}/recording/{rec['id']}", self.mb_headers, {"fmt": "json", "inc": "isrcs"}, True)
@@ -123,63 +130,108 @@ class PopForecastInferenceBackend:
                     val = i if isinstance(i, str) else i.get("id")
                     if val: isrcs.add(val)
 
-        if not isrcs: return {"success": False, "error": "No ISRCs found"}
-
-        isrc_str = ",".join(list(isrcs)[:50]) 
-        rb_data = self._request_json(f"{self.rb_url}/track", self.rb_headers, {"ids": isrc_str})
-        
         raw_valid_tracks = []
-        if "_error" not in rb_data and rb_data.get("content"):
-            raw_valid_tracks = [t for t in rb_data["content"] if t_norm in self._normalize(t.get("trackTitle", ""))]
+        if isrcs:
+            isrc_str = ",".join(list(isrcs)[:50]) 
+            rb_data = self._request_json(f"{self.rb_url}/track", self.rb_headers, {"ids": isrc_str})
             
+            if "_error" not in rb_data and rb_data.get("content"):
+                raw_valid_tracks = [t for t in rb_data["content"] if t_norm in self._normalize(t.get("trackTitle", ""))]
+
         # ---------------------------------------------------------
-        # THE GHOST PAYLOAD FALLBACK (Anti-Crash for missing ISRCs, Powered by Golden Batch Triangulation)
+        # PLAN B & C: YTMusic Bridge & Graceful Degradation
         # ---------------------------------------------------------
         if not raw_valid_tracks:
-            logger.warning(f"ISRC Gap detected for {track_title}. Initiating Batch Triangulation...")
+            logging.warning(f"ISRC Gap detected for '{track_title}'. Triggering YTMusic Fallback...")
             
-            # Aciona a nossa obra-prima de otimização
-            triangulated_artist_id = self._triangulate_rb_artist_id_batch(artist_name)
-            isrc_display = ",".join(list(isrcs)[:3]) if isrcs else "Unknown"
-            
-            return {
-                "success": True,
-                "inference_payload": {
-                    "title": track_title.title(),
-                    "artist": artist_name.title(),
-                    "album": "Unknown (ISRC Gap)",
-                    "original_release_year": oldest_year if oldest_year != 2099 else float(time.localtime().tm_year),
-                    "real_market_popularity": 0,
-                    "audio_features": {
-                        "danceability": 0.5, "energy": 0.5, "valence": 0.5, "acousticness": 0.5, 
-                        "instrumentalness": 0.0, "speechiness": 0.05, "tempo": 120.0, 
-                        "loudness": -6.0, "key": 0, "mode": 1, "time_signature": 4, "liveness": 0.1
-                    },
-                    "execution_time": round(time.time() - start_ts, 2),
-                    "raw_alternatives": [],
-                    "link": "",
-                    "isrc": isrc_display,
-                    "is_partial": True,
-                    "rb_artist_id": triangulated_artist_id  # <--- ID infalível mapeado!
-                }
-            }
+            try:
+                from ytmusicapi import YTMusic
+                yt = YTMusic()
+                yt_results = yt.search(f"{artist_name} {track_title}", filter="songs")
+                
+                if yt_results:
+                    yt_album = yt_results[0].get("album", {}).get("name", "")
+                    if yt_album:
+                        logging.info(f"YTMusic suggested album: '{yt_album}'. Searching ReccoBeats...")
+                        
+                        # 1. Search RB for the exact album 
+                        album_search_res = self._request_json(f"{self.rb_url}/album/search", self.rb_headers, {"searchText": yt_album, "size": 5})
+                        rb_albums = album_search_res.get("content", []) if isinstance(album_search_res, dict) else []
+                        
+                        target_track_id = None
+                        
+                        # 2. Look through the found albums' tracks 
+                        for alb in rb_albums:
+                            alb_id = alb.get("id")
+                            tracks_res = self._request_json(f"{self.rb_url}/album/{alb_id}/track", self.rb_headers, {"size": 50})
+                            rb_tracks = tracks_res.get("content", []) if isinstance(tracks_res, dict) else []
+                            
+                            for t in rb_tracks:
+                                if self._normalize(track_title) in self._normalize(t.get("trackTitle", "")):
+                                    target_track_id = t.get("id")
+                                    break
+                            
+                            if target_track_id:
+                                break
+                                
+                        # 3. If we found the track ID via YTMusic's tip, delegate to the main ID method
+                        if target_track_id:
+                            logging.info(f"YTMusic Fallback Success! Track ID found: {target_track_id}")
+                            delegated_payload = self.get_inference_data_by_id(
+                                track_id=target_track_id, 
+                                context_artist_id=context_artist_id
+                            )
+                            if delegated_payload.get("success"):
+                                delegated_payload["inference_payload"]["execution_time"] = round(time.time() - start_ts, 2)
+                            return delegated_payload
+                            
+            except Exception as e:
+                logging.error(f"YTMusic Fallback encountered an error: {e}")
 
-        # Winner Selection based on Popularity
+            # PLAN C: Graceful Degradation (Artist-Only Match)
+            logging.warning("YTMusic Fallback exhausted or failed. Routing to Artist Discography.")
+            
+            # Fetch a pool of 5 artists to avoid fuzzy mismatches (e.g., "Gilberto Gil Hernandez")
+            artist_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 5})
+            artists = artist_res.get("content", []) if isinstance(artist_res, dict) else []
+            
+            if artists:
+                # Default to the first result, but actively hunt for an exact match
+                matched_artist = artists[0] 
+                for a in artists:
+                    if a.get("name", "").lower() == artist_name.lower():
+                        matched_artist = a
+                        break
+                        
+                return {
+                    "success": True, 
+                    "is_artist_only_fallback": True, 
+                    "message": f"Track not found. Routing to {matched_artist.get('name')}'s catalog.",
+                    "artist_fallback_data": {
+                        "id": matched_artist.get("id"),
+                        "name": matched_artist.get("name")
+                    }
+                }
+            else:
+                return {"success": False, "error": f"Neither track nor artist '{artist_name}' could be found."}
+
+        # ---------------------------------------------------------
+        # PLAN A (CONTINUED): Winner Selection from MusicBrainz Data
+        # ---------------------------------------------------------
         raw_valid_tracks.sort(key=lambda x: int(x.get("popularity", 0) or 0), reverse=True)
         best_choice = raw_valid_tracks[0]
         
-        # If no specific album is requested (Generic Search), we apply the Studio-Only filter
         if not album_name:
             NON_STUDIO_TERMS = [
                 "live", "ao vivo", "acoustic", "acústico", "unplugged", 
-                "demo", "remaster", "remix", "edit", "version", "mix"
+                "demo", "remaster", "remix", "edit", "version", "mix",
+                "best", "hits", "essential", "collection", "online", 
+                "party", "nostalgia", "throwback", "but..."
             ]
             
-            # Check if the user EXPLICITLY searched for a non-studio version (e.g., "Carry On acoustic")
             is_explicit_search = any(term in t_norm for term in NON_STUDIO_TERMS)
             
             if not is_explicit_search:
-                # Keep only tracks that DO NOT contain any of the forbidden terms in their title
                 studio_only = [
                     v for v in raw_valid_tracks 
                     if not any(term in v.get("trackTitle", "").lower() for term in NON_STUDIO_TERMS)
@@ -187,45 +239,72 @@ class PopForecastInferenceBackend:
                 if studio_only: 
                     best_choice = studio_only[0]
 
-        # AGORA SIM, pede o álbum e features apenas para o Vencedor! (Gargalo resolvido)
-        final_artist = best_choice.get("artistName")
-        if not final_artist and best_choice.get("artists"):
-            final_artist = best_choice["artists"][0].get("name")
-        final_artist = final_artist or artist_name
-
-        album_payload = self._request_json(f"{self.rb_url}/track/{best_choice['id']}/album", self.rb_headers)
-        final_album = "Unknown Album"
-        if "content" in album_payload:
-            def rank_album(alb):
-                n = alb.get("name", "").lower()
-                p = -1000 if any(w in n for w in ["best", "hits", "essential", "live", "collection", "online", "version"]) else 0
-                return (p, alb.get("popularity", 0))
-            best_album = max(album_payload["content"], key=rank_album)
-            final_album = best_album.get("name")
-
-        raw_features = self._request_json(f"{self.rb_url}/track/{best_choice['id']}/audio-features", self.rb_headers)
-        audio_features = {}
-        if "_error" not in raw_features:
-            keys = ["id", "isrc", "danceability", "energy", "key", "loudness", "mode", "speechiness", "acousticness", "instrumentalness", "liveness", "valence", "tempo"]
-            audio_features = {k: raw_features.get(k) for k in keys if k in raw_features}
-
+        # THE DELEGATION HANDOFF (Wrapper Pattern)
+        delegated_payload = self.get_inference_data_by_id(
+            track_id=best_choice["id"], 
+            context_artist_id=context_artist_id
+        )
+        
+        if not delegated_payload.get("success"):
+            return delegated_payload
+            
+        result_payload = delegated_payload["inference_payload"]
+        if oldest_year != 2099:
+            result_payload["original_release_year"] = oldest_year
+            
+        result_payload["raw_alternatives"] = raw_valid_tracks
+        result_payload["execution_time"] = round(time.time() - start_ts, 2)
+        
         return {
             "success": True,
-            "inference_payload": {
-                "title": best_choice.get("trackTitle"),
-                "artist": final_artist,
-                "album": final_album,
-                "original_release_year": oldest_year if oldest_year != 2099 else None,
-                "real_market_popularity": int(best_choice.get("popularity", 0) or 0),
-                "audio_features": audio_features,
-                "execution_time": round(time.time() - start_ts, 2),
-                "raw_alternatives": raw_valid_tracks,
-                "link": best_choice.get("href", ""),
-                "isrc": best_choice.get("isrc", ""),
-                "is_partial": False,
-                "rb_artist_id": best_choice.get("artists", [{}])[0].get("id", "") if best_choice.get("artists") else "" # <--- NOVA LINHA
-            }
+            "inference_payload": result_payload
         }
+
+
+    def _perform_deep_catalog_scan(self, artist_name: str, track_title: str) -> str:
+        """
+        Nuclear fallback: Scans the entire artist catalog on ReccoBeats page by page.
+        Returns the best matching Track ID or None based on popularity.
+        """
+        # 1. Resolve Artist ID first
+        search_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 1})
+        
+        # Checking if search_res is valid and has content
+        artists = search_res.get("content", []) if isinstance(search_res, dict) else []
+        if not artists:
+            return None
+        
+        artist_id = artists[0]['id']
+        current_page = 0
+        total_pages = 1
+        best_match = {"id": None, "popularity": -1}
+
+        # 2. Exhaustive pagination to ensure we scan everything
+        while current_page < total_pages:
+            tracks_res = self._request_json(f"{self.rb_url}/artist/{artist_id}/track", self.rb_headers, {"page": current_page, "size": 50})
+            if "_error" in tracks_res: 
+                break
+                
+            total_pages = tracks_res.get("totalPages", 1) # API tells us how many pages exist
+            tracks = tracks_res.get("content", [])
+            
+            for t in tracks:
+                rb_title = t.get("trackTitle", "").lower()
+                # Fuzzy matching to find the best version
+                if track_title.lower() in rb_title or rb_title in track_title.lower():
+                    pop = int(t.get("popularity", 0))
+                    if pop > best_match["popularity"]:
+                        best_match = {"id": t.get("id"), "popularity": pop}
+            
+            current_page += 1
+            # Optimization: if we already found a high-pop match, we can skip deeper pages
+            if best_match["id"] and current_page > 3: 
+                break
+                
+        return best_match["id"]
+
+
+
 
     # =====================================================================
     # MODO PROFUNDO (LENTO): Acionado apenas sob demanda (Streamlit)
@@ -606,8 +685,19 @@ class PopForecastInferenceBackend:
         album_payload = self._request_json(f"{self.rb_url}/track/{track_id}/album", self.rb_headers)
         final_album = "Unknown Album"
         release_year = "0000"
+        
         if "content" in album_payload and album_payload["content"]:
-            best_album = album_payload["content"][0]
+            def rank_album(alb):
+                n = alb.get("name", "").lower()
+                # Extended penalty list to catch modern viral/mood playlists
+                penalties = [
+                    "best", "hits", "essential", "live", "collection", "online", 
+                    "version", "remix", "party", "nostalgia", "throwback"
+                ]
+                p = -1000 if any(w in n for w in penalties) else 0
+                return (p, int(alb.get("popularity", 0)))
+                
+            best_album = max(album_payload["content"], key=rank_album)
             final_album = best_album.get("name", "Unknown Album")
             release_year = str(best_album.get("releaseDate", "0000"))[:4]
 
@@ -649,6 +739,7 @@ class PopForecastInferenceBackend:
                 "link": track_data.get("href", ""),
                 "isrc": track_data.get("isrc", "Unknown"),
                 "is_partial": not bool(audio_features),
-                "rb_artist_id": context_artist_id if context_artist_id else (raw_artists[0].get("id", "") if raw_artists else "")
+                "rb_artist_id": context_artist_id if context_artist_id else (raw_artists[0].get("id", "") if raw_artists else ""),
+                "rb_track_id": track_id,
             }
         }
