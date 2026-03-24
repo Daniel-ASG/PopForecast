@@ -80,6 +80,8 @@ class PopForecastInferenceBackend:
         # ---------------------------------------------------------
         # PLAN A: MusicBrainz Heuristics
         # ---------------------------------------------------------
+        import logging # Certifique-se de que está importado
+
         if album_name:
             queries = [
                 f'recording:"{track_title}" AND artist:"{artist_name}" AND release:"{album_name}"',
@@ -91,10 +93,15 @@ class PopForecastInferenceBackend:
                 f'"{artist_name}" "{track_title}" status:official'
             ]
             
+        logging.info(f"🔍 [MB Search] Iniciando busca textual para: '{artist_name} - {track_title}'")
+        
         all_recs = []
         for q in queries:
             data = self._request_json(f"{self.mb_url}/recording", self.mb_headers, {"query": q, "fmt": "json", "limit": 100}, True)
-            if "_error" not in data: all_recs.extend(data.get("recordings", []))
+            if "_error" not in data: 
+                all_recs.extend(data.get("recordings", []))
+
+        logging.info(f"📥 [MB Search] {len(all_recs)} gravações brutas retornadas do MusicBrainz.")
 
         seen_ids, candidates = set(), []
         oldest_year = 2099
@@ -122,6 +129,8 @@ class PopForecastInferenceBackend:
 
             candidates.sort(key=lambda x: x[0], reverse=True)
             
+        logging.info(f"🎯 [MB Search] {len(candidates)} candidatos aprovados na heurística textual.")
+            
         isrcs = set()
         for _, rec in candidates[:15]: 
             data = self._request_json(f"{self.mb_url}/recording/{rec['id']}", self.mb_headers, {"fmt": "json", "inc": "isrcs"}, True)
@@ -130,6 +139,8 @@ class PopForecastInferenceBackend:
                     val = i if isinstance(i, str) else i.get("id")
                     if val: isrcs.add(val)
 
+        logging.info(f"🏷️ [MB Search] {len(isrcs)} ISRCs únicos extraídos dos top 15 candidatos.")
+
         raw_valid_tracks = []
         if isrcs:
             isrc_str = ",".join(list(isrcs)[:50]) 
@@ -137,6 +148,9 @@ class PopForecastInferenceBackend:
             
             if "_error" not in rb_data and rb_data.get("content"):
                 raw_valid_tracks = [t for t in rb_data["content"] if t_norm in self._normalize(t.get("trackTitle", ""))]
+                logging.info(f"✅ [RB Match] {len(raw_valid_tracks)} faixas validadas no ReccoBeats a partir dos ISRCs.")
+        else:
+            logging.warning(f"⚠️ [MB Search] Nenhum ISRC encontrado para '{track_title}' no MusicBrainz.")
 
         # ---------------------------------------------------------
         # PLAN B & C: YTMusic Bridge & Graceful Degradation
