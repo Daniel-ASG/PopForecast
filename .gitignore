@@ -1,15 +1,20 @@
 # ---- Python / caches ----
 __pycache__/
 *.py[cod]
+*.log
 
-# ---- Virtual env (Poetry pode variar; ajuste conforme seu setup) ----
+# ---- Virtual env (Poetry) ----
 .venv/
 venv/
+.env
 
-# ---- Build artifacts ----
+# ---- Build artifacts & Tests ----
 build/
 dist/
 *.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
 
 # ---- OS / IDE ----
 .DS_Store
@@ -20,18 +25,22 @@ Thumbs.db
 # ---- Data: do not version datasets ----
 data/raw/*
 data/processed/*
+data/interim/*
 
-# Keep directory structure
+# Keep directory structure for Data
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 
+# ---- Notebooks & Docs ----
 notebooks/.ipynb_checkpoints/
 tmp/
-.gitattributes
 docs_internal/
-models/cycle_03/champion.json
-.env
 
-# Ignore data and models (use DVC or cloud storage for these)
-data/interim/
+# ---- Models (Use DVC or cloud storage for binaries) ----
+models/cycle_03/champion.json
+# *.joblib
+*.pkl
+
+# ---- Streamlit & Git ----
 .streamlit/secrets.toml
+.gitattributes

@@ -816,3 +816,31 @@ To solve the data contamination issue and elevate the application to an enterpri
 - **Methodology Tab:** Embedded the MoE architecture, gating logic, and problem-solving methodology directly into a secondary UI tab for immediate access by non-technical stakeholders and engineering recruiters, completely bridging the gap between data science and product.
 
 **STATUS:** MVP COMPLETED. Phase 4 (Delivery) successfully finalized. The architecture is mathematically sound, highly interpretable, and ready for portfolio showcase and cloud deployment.
+
+
+## 📅 CYCLE 07 — REPRODUCIBILITY & ENVIRONMENT DECOUPLING
+
+### 1. Strategic Infrastructure Migration (OneDrive Decoupling)
+- **Rationale:** Identified "Stale DOM" issues and file-locking conflicts caused by cloud-syncing services (OneDrive).
+- **Action:** Migrated the entire project root from cloud-synced folders to a local dedicated development path (`C:\dev\PopForecast`).
+- **Impact:** Eliminated synchronization latency and ensured that Git remains the sole "Source of Truth" for the codebase, preventing environment drift between different hardware (Dell vs. Asus).
+
+### 2. Dependency Management Upgrade (Poetry 2.0)
+- **Engine:** Transitioned environment orchestration to **Poetry 2.0.0**.
+- **Workflow Change:** Adopted the `poetry run` standard for execution to bypass the deprecated native `shell` command, ensuring a cleaner interaction with the virtual environment.
+- **Environment Rebuild:** Performed a clean `poetry install` to regenerate the `.venv` and `poetry.lock` from scratch in the new local path, ensuring 100% deterministic dependency mapping.
+
+### 3. UI Integrity & Performance (Pre-fetching Logic)
+- **Optimization:** Implemented a **Pre-fetching Design Pattern** in the Streamlit UI layer.
+- **Problem:** Mid-render freezes occurred when switching to the "Artist Analytics" tab due to synchronous data fetching.
+- **Solution:** Integrated `cached_get_artist_evolution` directly into the primary search flow.
+- **Result:** Data for all tabs is now fully hydrated in the cache before the first frame is rendered, eliminating UI "ghosting" and ensuring immediate tab switching.
+
+### 4. Git Hygiene & Security
+- **Refined `.gitignore`:** Hardened the exclusion rules to include:
+  - Binary machine learning artifacts (`*.joblib`, `*.pkl`).
+  - Local virtual environments (`.venv/`).
+  - Execution logs and test caches (`.pytest_cache/`, `*.log`).
+- **State Security:** Verified that `.streamlit/secrets.toml` and `.env` remain strictly excluded to prevent credential leakage.
+
+**STATUS:** ENVIRONMENT STABILIZED. The project is now immune to cloud-sync interference and ready for high-performance local development and cloud deployment.
