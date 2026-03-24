@@ -147,6 +147,11 @@ def cached_get_rb_album_tracks(album_id):
 def cached_build_curator_menu(raw_alternatives):
     return backend.build_curator_menu(raw_alternatives)
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_get_artist_evolution(artist_id):
+    return backend.get_artist_evolution(artist_id)
+
+
 LASTFM_API_KEY = st.secrets.get("LASTFM_API_KEY", "YOUR_LASTFM_KEY")
 
 def get_lastfm_data(artist_name: str) -> dict:
@@ -229,6 +234,10 @@ def perform_search(artist, track, album=None):
             st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm_data.get("listeners_log", 15.0)
             st.session_state.lastfm_tags = lfm_data.get("tags", [])
             
+            rb_art_id = st.session_state.live_payload.get("rb_artist_id")
+            if rb_art_id:
+                cached_get_artist_evolution(rb_art_id)
+
             st.session_state.search_error = None
             st.session_state.search_warning = None
             
@@ -798,7 +807,7 @@ with tab_simulator:
                                 track_id = selected_track.get("id")
                                 track_title = selected_track.get("title")
                                 
-                                with st.spinner(f"Extracting exact DNA for <{track_title}>..."):
+                                with st.spinner(f"Extracting exact DNA for [{track_title}]..."):
                                     # Passing rb_artist_id as context to ensure correct artist focus in Hero Card
                                     res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
                                     
@@ -813,13 +822,18 @@ with tab_simulator:
                                         lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
                                         st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
                                         st.session_state.lastfm_tags = lfm.get("tags", [])
+
+                                        if rb_artist_id:
+                                            cached_get_artist_evolution(rb_artist_id)
                                         
                                         st.session_state.search_error = None
+                                        st.session_state.search_warning = None
                                         st.rerun()
                                     else:
                                         st.error("Could not load track data. Try again.")
 
 
+# --- ANALYTICS TAB ---
 # --- ANALYTICS TAB ---
 with tab_analytics:
     if not active_payload or not active_payload.get("rb_artist_id"):
@@ -834,23 +848,14 @@ with tab_analytics:
         st.markdown(f"Track the acoustic evolution and energy shifts of **{current_artist}** across their key discography milestones.")
         
         # ==========================================
-        # STATE CACHE GUARD (PRE-FETCHING UNDER THE HOOD)
+        # INSTANT RENDERING (SEM SPINNERS!)
+        # Os dados já foram pré-carregados durante a fase de busca.
         # ==========================================
-        # We only hit the backend once per artist. This prevents the sliders on the main page from lagging!
-        if st.session_state.get('evo_artist_id') != rb_artist_id:
-            with st.spinner(f"Pre-computing temporal analytics for {current_artist}..."):
-                try:
-                    st.session_state.evo_data = backend.get_artist_evolution(rb_artist_id)
-                    st.session_state.evo_artist_id = rb_artist_id
-                except Exception as e:
-                    st.session_state.evo_data = None
-                    st.session_state.evo_artist_id = rb_artist_id # Set ID anyway to prevent infinite retry loops
-                    st.error(f"Failed to load evolution data: {e}")
-        
-        # ==========================================
-        # INSTANT RENDERING FROM MEMORY
-        # ==========================================
-        evo_data = st.session_state.get('evo_data')
+        try:
+            evo_data = cached_get_artist_evolution(rb_artist_id)
+        except Exception as e:
+            evo_data = None
+            st.error(f"Failed to load evolution data: {e}")
         
         if evo_data:
             df_evo = pd.DataFrame(evo_data)
@@ -897,7 +902,7 @@ with tab_analytics:
             
             st.plotly_chart(fig_evo, width='stretch', config={'displayModeBar': False})
             
-        elif st.session_state.get('evo_artist_id') == rb_artist_id and not evo_data:
+        else:
             st.warning(f"Not enough temporal data to generate an evolution timeline for {current_artist}.")
 
 
