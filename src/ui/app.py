@@ -188,6 +188,10 @@ app_mode = st.sidebar.radio("Select Workflow:", ["Live Search", "Strategic Sandb
 st.sidebar.divider()
 st.sidebar.markdown('##### Data Scientist: Daniel Gomes')
 st.sidebar.markdown('##### [Linkedin](https://www.linkedin.com/in/daniel-asgomes/)')
+st.sidebar.divider()
+if st.sidebar.button("🧹 Clear System Cache", use_container_width=True, help="Force the system to forget past searches."):
+    st.cache_data.clear()
+    st.sidebar.success("Cache cleared! Ready for fresh searches.")
 
 if "live_payload" not in st.session_state: st.session_state.live_payload = None
 if "sandbox_payload" not in st.session_state: st.session_state.sandbox_payload = None
@@ -294,10 +298,17 @@ with tab_simulator:
                 st.session_state.live_payload = None
                 st.session_state.search_error = None
                 st.session_state.search_warning = None
+
+                st.session_state.catalog_selected_artist_id = None
+                st.session_state.catalog_selected_artist = None
+                st.session_state.catalog_albums = None
+                st.session_state.current_album_tracks = None
+                st.session_state.auto_load_catalog = False
+                
                 st.session_state.pending_artist = artist_q
                 st.session_state.pending_track = track_q
                 st.session_state.is_searching = True
-                st.rerun() 
+                st.rerun()
                 
             if st.session_state.get("is_searching"):
                 st.session_state.is_searching = False 
@@ -783,7 +794,7 @@ with tab_simulator:
                         st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
                         
                         def format_track_option(track_dict):
-                            t_num = track_dict.get('track_number', '?')
+                            # t_num = track_dict.get('track_number', '?')
                             t_title = track_dict.get('title', 'Unknown')
                             t_type = track_dict.get('track_type', 'studio').lower()
                             
@@ -791,7 +802,7 @@ with tab_simulator:
                                 "studio": "🎧 [STUDIO]", "live": "🎸 [LIVE]", "remix": "🎛️ [REMIX]",
                                 "acoustic": "🪵 [ACOUSTIC]", "instrumental": "🎹 [INSTRUMENTAL]", "demo": "📝 [DEMO]"
                             }
-                            return f"{t_num}. {badges.get(t_type, '🎧 [STUDIO]')} {t_title}"
+                            return f"{badges.get(t_type, '🎧 [STUDIO]')} {t_title}"
 
                         selected_track = st.selectbox(
                             "Select a track to analyze:", 
