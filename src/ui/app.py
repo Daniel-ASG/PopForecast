@@ -285,53 +285,166 @@ with tab_simulator:
     # ROW 1: FLIGHT PANEL (HERO, METRICS & RADAR)
     # Sempre renderiza o grid, com dados ou vazio (Skeleton UI)
     # ==========================================
-    top_col_search, top_col_hero, top_col_radar = st.columns([2, 4, 4], gap="medium")
+    top_col_search, top_col_hero, top_col_radar = st.columns([2.5, 4, 3.5], gap="medium")
     
-    # --- COLUNA 1: BUSCA (Sempre Visível) ---
+    # --- COLUNA 1: BUSCA E CATÁLOGO (Abas) ---
     with top_col_search:
-        st.markdown("### 🔍 Search" if app_mode == "Live Search" else "### 🏗️ Sandbox")
         if app_mode == "Live Search":
-            artist_q = st.text_input("Artist:", placeholder="e.g., Stan Getz", key="search_art")
-            track_q = st.text_input("Track:", placeholder="e.g., The Girl...", key="search_trk")
+            st.markdown("### 🔍 Search")
             
-            if st.button("Extract DNA", width='stretch') and artist_q and track_q:
-                st.session_state.live_payload = None
-                st.session_state.search_error = None
-                st.session_state.search_warning = None
+            # Divide o painel em duas abas compactas
+            tab_text, tab_cat = st.tabs(["🔎 Text Search", "🗂️ Catalog"])
+            
+            with tab_text:
+                artist_q = st.text_input("Artist:", placeholder="e.g., Stan Getz", key="search_art")
+                track_q = st.text_input("Track:", placeholder="e.g., The Girl...", key="search_trk")
+                
+                if st.button("Extract DNA", width='stretch') and artist_q and track_q:
+                    # 1. Limpa o painel superior e erros
+                    st.session_state.live_payload = None
+                    st.session_state.search_error = None
+                    st.session_state.search_warning = None
+                    
+                    # 2. Hard Reset do Catálogo (Impede o State Bleed)
+                    st.session_state.catalog_selected_artist_id = None
+                    st.session_state.catalog_selected_artist = None
+                    st.session_state.catalog_albums = None
+                    st.session_state.current_album_tracks = None
+                    st.session_state.auto_load_catalog = False
+                    
+                    # 3. Dispara a busca
+                    st.session_state.pending_artist = artist_q
+                    st.session_state.pending_track = track_q
+                    st.session_state.is_searching = True
+                    st.rerun() 
+                    
+                if st.session_state.get("is_searching"):
+                    st.session_state.is_searching = False 
+                    perform_search(st.session_state.pending_artist, st.session_state.pending_track)
+                    st.rerun() 
 
-                st.session_state.catalog_selected_artist_id = None
-                st.session_state.catalog_selected_artist = None
-                st.session_state.catalog_albums = None
-                st.session_state.current_album_tracks = None
-                st.session_state.auto_load_catalog = False
-                
-                st.session_state.pending_artist = artist_q
-                st.session_state.pending_track = track_q
-                st.session_state.is_searching = True
-                st.rerun()
-                
-            if st.session_state.get("is_searching"):
-                st.session_state.is_searching = False 
-                perform_search(st.session_state.pending_artist, st.session_state.pending_track)
-                st.rerun() 
+                # Renderização ÚNICA de Erro (Vermelho)
+                if st.session_state.get("search_error"):
+                    st.markdown(f"""
+                    <div style='background-color: rgba(255, 75, 75, 0.1); border-left: 3px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-top: 10px;'>
+                        <p style='color: #ff4b4b; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_error}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                # Renderização ÚNICA de Fallback (Laranja)
+                elif st.session_state.get("search_warning"):
+                    st.markdown(f"""
+                    <div style='background-color: rgba(255, 170, 0, 0.1); border-left: 3px solid #ffaa00; padding: 10px; border-radius: 4px; margin-top: 10px;'>
+                        <p style='color: #ffaa00; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_warning}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
 
-            # Renderização ÚNICA de Erro (Vermelho)
-            if st.session_state.get("search_error"):
-                st.markdown(f"""
-                <div style='background-color: rgba(255, 75, 75, 0.1); border-left: 3px solid #ff4b4b; padding: 10px; border-radius: 4px; margin-top: 10px;'>
-                    <p style='color: #ff4b4b; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_error}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-            # Renderização ÚNICA de Fallback (Laranja)
-            elif st.session_state.get("search_warning"):
-                st.markdown(f"""
-                <div style='background-color: rgba(255, 170, 0, 0.1); border-left: 3px solid #ffaa00; padding: 10px; border-radius: 4px; margin-top: 10px;'>
-                    <p style='color: #ffaa00; margin: 0; font-size: 0.85em;'>⚠️ {st.session_state.search_warning}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
+            with tab_cat:
+                # Resolve Artist Context (Prioriza o clique em colaboradores)
+                if st.session_state.get('catalog_selected_artist_id'):
+                    current_artist = st.session_state['catalog_selected_artist']
+                    rb_artist_id = st.session_state['catalog_selected_artist_id']
+                elif active_payload:
+                    current_artist = active_payload.get('artist', 'Unknown Artist')
+                    rb_artist_id = active_payload.get("rb_artist_id")
+                else:
+                    current_artist = None
+                    rb_artist_id = None
+
+                if not rb_artist_id:
+                    st.info("Search a track or click a collaborator to explore their catalog.")
+                else:
+                    st.markdown(f"**{current_artist}**'s Discography")
+
+                    # AUTO-LOAD LOGIC (Disparado pelo clique no Colaborador ou Fallback)
+                    if st.session_state.get('auto_load_catalog') and not st.session_state.get('catalog_albums'):
+                        with st.spinner("Loading catalog..."):
+                            albums = cached_get_rb_artist_catalog(rb_artist_id)
+                            if albums:
+                                st.session_state['catalog_albums'] = albums
+                                st.session_state['auto_load_catalog'] = False
+                                st.rerun()
+
+                    # MANUAL LOAD BUTTON
+                    if not st.session_state.get('catalog_albums') or st.session_state.get('catalog_selected_artist') != current_artist:
+                        if st.button("Load Catalog", width='stretch', key="cat_load_btn"):
+                            with st.spinner("Fetching discography..."):
+                                albums = cached_get_rb_artist_catalog(rb_artist_id)
+                                if albums:
+                                    st.session_state['catalog_albums'] = albums
+                                    st.session_state['catalog_selected_artist'] = current_artist
+                                    st.session_state['current_album_tracks'] = None 
+                                    st.rerun()
+
+                    # ALBUM SELECTION
+                    if st.session_state.get('catalog_albums') and st.session_state.get('catalog_selected_artist') == current_artist:
+                        def format_album_option(album_dict):
+                            return f"({album_dict.get('year', '????')}) - {album_dict.get('title', '???')}"
+
+                        selected_album = st.selectbox(
+                            "Select Album:", 
+                            options=st.session_state['catalog_albums'], 
+                            format_func=format_album_option,
+                            index=None,
+                            placeholder="Choose an album...",
+                            key="cat_album_sel"
+                        )
+
+                        if selected_album:
+                            album_id = selected_album.get("id")
+                            album_title = selected_album.get("title")
+                            
+                            if st.session_state.get('current_album_name') != album_title:
+                                with st.spinner("Loading tracks..."):
+                                    tracks = cached_get_rb_album_tracks(album_id)
+                                    st.session_state['current_album_tracks'] = tracks
+                                    st.session_state['current_album_name'] = album_title
+
+                        # TRACK SELECTION & ANALYSIS
+                        if st.session_state.get('current_album_tracks'):
+                            def format_track_option(track_dict):
+                                t_title = track_dict.get('title', 'Unknown')
+                                t_type = track_dict.get('track_type', 'studio').lower()
+                                pop = track_dict.get('popularity', track_dict.get('real_market_popularity', '?'))
+                                badges = {"studio": "🎧", "live": "🎸", "remix": "🎛️", "acoustic": "🪵", "instrumental": "🎹", "demo": "📝"}
+                                return f"🔥 {pop} | {badges.get(t_type, '🎧')} {t_title}"
+
+                            selected_track = st.selectbox(
+                                "Select a track to analyze:", 
+                                options=st.session_state['current_album_tracks'],
+                                format_func=format_track_option,
+                                index=None,
+                                placeholder="Choose a track...",
+                                key="cat_track_sel"
+                            )
+                            
+                            if selected_track:
+                                if st.button("🚀 Analyze Selected Track", type="primary", width='stretch', key="cat_final_load"):
+                                    track_id = selected_track.get("id")
+                                    track_title = selected_track.get("title")
+                                    
+                                    with st.spinner(f"Extracting [{track_title}]..."):
+                                        res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
+                                        
+                                        if res.get("success"):
+                                            st.session_state.live_payload = res["inference_payload"]
+                                            if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
+                                                st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
+                                            
+                                            lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
+                                            st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
+                                            st.session_state.lastfm_tags = lfm.get("tags", [])
+                                            
+                                            if rb_artist_id:
+                                                cached_get_artist_evolution(rb_artist_id)
+                                                
+                                            st.session_state.search_error = None
+                                            st.session_state.search_warning = None
+                                            st.rerun()
+                                        else:
+                                            st.error("Could not load track data. Try again.")
         else:
+            st.markdown("### 🏗️ Sandbox")
             tier_new = st.selectbox("Tier:", ["Cold Start", "Tipping Point", "Mainstream"], key="search_tier")
             if st.button("Re-Init Sandbox", type="primary", width='stretch'):
                 init_sandbox(tier_new)
@@ -381,7 +494,7 @@ with tab_simulator:
         with top_col_hero:
             # 1. Hero Card Header
             st.markdown(f"<h2 style='margin-top: -15px;'>💿 {active_payload['title']}</h2>", unsafe_allow_html=True)
-            listen_link = f" | **Stream:** [Listen 🎧]({active_payload.get('link')})" if active_payload.get("link") else ""
+            listen_link = f" | **Stream:** [Listen_🎧]({active_payload.get('link')})" if active_payload.get("link") else ""
             year_str = int(active_payload['original_release_year']) if active_payload.get('original_release_year') else "????"
             st.markdown(f"**Artist:** {active_payload['artist']} | **Album:** {active_payload['album']} | **Year:** {year_str}{listen_link}")
             
@@ -695,7 +808,7 @@ with tab_simulator:
                             st.dataframe(
                                 styled_df, 
                                 width='stretch',
-                                column_config={"link": st.column_config.LinkColumn("Spotify", display_text="Listen 🎧")}
+                                column_config={"link": st.column_config.LinkColumn("Spotify", display_text="Listen_🎧")}
                             )
                         else:
                             st.warning("No other versions found.")
@@ -704,147 +817,147 @@ with tab_simulator:
         st.markdown("<p style='text-align: center; color: #555555;'>No track loaded. The Simulation Report will be available here.</p>", unsafe_allow_html=True)
 
 
-    # ==========================================
-    # ARTIST CATALOG EXPLORER (HYBRID UX)
-    # ==========================================
-    # This block displays if a track is loaded OR if a collaborator's catalog was triggered.
-    if active_payload or st.session_state.get('catalog_selected_artist_id'):
+#     # ==========================================
+#     # ARTIST CATALOG EXPLORER (HYBRID UX)
+#     # ==========================================
+#     # This block displays if a track is loaded OR if a collaborator's catalog was triggered.
+#     if active_payload or st.session_state.get('catalog_selected_artist_id'):
         
-        # Determine if we should expand the drawer automatically (e.g., after clicking a feat)
-        is_expanded = st.session_state.get('auto_load_catalog', False)
+#         # Determine if we should expand the drawer automatically (e.g., after clicking a feat)
+#         is_expanded = st.session_state.get('auto_load_catalog', False)
         
-        with st.expander("🗂️ Artist Catalog Explorer", expanded=is_expanded):
+#         with st.expander("🗂️ Artist Catalog Explorer", expanded=is_expanded):
             
-            # 1. Resolve Artist Context
-            # We prioritize the collaborator trigger from the Hero Card if it exists
-            if st.session_state.get('catalog_selected_artist_id'):
-                current_artist = st.session_state['catalog_selected_artist']
-                rb_artist_id = st.session_state['catalog_selected_artist_id']
-            else:
-                current_artist = active_payload.get('artist', 'Unknown Artist')
-                rb_artist_id = active_payload.get("rb_artist_id")
+#             # 1. Resolve Artist Context
+#             # We prioritize the collaborator trigger from the Hero Card if it exists
+#             if st.session_state.get('catalog_selected_artist_id'):
+#                 current_artist = st.session_state['catalog_selected_artist']
+#                 rb_artist_id = st.session_state['catalog_selected_artist_id']
+#             else:
+#                 current_artist = active_payload.get('artist', 'Unknown Artist')
+#                 rb_artist_id = active_payload.get("rb_artist_id")
 
-            if not rb_artist_id:
-                st.info(f"Catalog exploration is currently unavailable for {current_artist}.")
-            else:
-                st.markdown(f"Explore **{current_artist}**'s full discography and album tracks.")
+#             if not rb_artist_id:
+#                 st.info(f"Catalog exploration is currently unavailable for {current_artist}.")
+#             else:
+#                 st.markdown(f"Explore **{current_artist}**'s full discography and album tracks.")
 
-                # 2. AUTO-LOAD LOGIC (Triggered by Collaborator Click)
-                if st.session_state.get('auto_load_catalog') and not st.session_state.get('catalog_albums'):
-                    try:
-                        with st.spinner(f"Loading {current_artist}'s catalog..."):
-                            albums = cached_get_rb_artist_catalog(rb_artist_id)
-                            if albums:
-                                st.session_state['catalog_albums'] = albums
-                                st.session_state['auto_load_catalog'] = False # Reset trigger after success
-                            else:
-                                st.warning(f"No albums found for {current_artist}.")
-                    except Exception as e:
-                        st.error(f"Catalog search failed: {e}")
+#                 # 2. AUTO-LOAD LOGIC (Triggered by Collaborator Click)
+#                 if st.session_state.get('auto_load_catalog') and not st.session_state.get('catalog_albums'):
+#                     try:
+#                         with st.spinner(f"Loading {current_artist}'s catalog..."):
+#                             albums = cached_get_rb_artist_catalog(rb_artist_id)
+#                             if albums:
+#                                 st.session_state['catalog_albums'] = albums
+#                                 st.session_state['auto_load_catalog'] = False # Reset trigger after success
+#                             else:
+#                                 st.warning(f"No albums found for {current_artist}.")
+#                     except Exception as e:
+#                         st.error(f"Catalog search failed: {e}")
 
-                # 3. MANUAL LOAD BUTTON (Initial State / Fallback)
-                if not st.session_state.get('catalog_albums') or st.session_state.get('catalog_selected_artist') != current_artist:
-                    if st.button(f"Load {current_artist}'s Full Discography", width='stretch', key="cat_load_btn"):
-                        with st.spinner(f"Fetching discography..."):
-                            try:
-                                albums = cached_get_rb_artist_catalog(rb_artist_id)
+#                 # 3. MANUAL LOAD BUTTON (Initial State / Fallback)
+#                 if not st.session_state.get('catalog_albums') or st.session_state.get('catalog_selected_artist') != current_artist:
+#                     if st.button(f"Load {current_artist}'s Full Discography", width='stretch', key="cat_load_btn"):
+#                         with st.spinner(f"Fetching discography..."):
+#                             try:
+#                                 albums = cached_get_rb_artist_catalog(rb_artist_id)
 
-                                if albums:
-                                    st.session_state['catalog_albums'] = albums
-                                    st.session_state['catalog_selected_artist'] = current_artist
-                                    st.session_state['current_album_tracks'] = None 
-                                    st.rerun()
-                                else:
-                                    st.warning(f"No albums found for {current_artist}.")
-                            except Exception as e:
-                                st.error(f"Catalog search failed: {e}")
+#                                 if albums:
+#                                     st.session_state['catalog_albums'] = albums
+#                                     st.session_state['catalog_selected_artist'] = current_artist
+#                                     st.session_state['current_album_tracks'] = None 
+#                                     st.rerun()
+#                                 else:
+#                                     st.warning(f"No albums found for {current_artist}.")
+#                             except Exception as e:
+#                                 st.error(f"Catalog search failed: {e}")
 
-                # 4. ALBUM SELECTION (Reactive)
-                if st.session_state.get('catalog_albums') and st.session_state.get('catalog_selected_artist') == current_artist:
-                    st.divider()
+#                 # 4. ALBUM SELECTION (Reactive)
+#                 if st.session_state.get('catalog_albums') and st.session_state.get('catalog_selected_artist') == current_artist:
+#                     st.divider()
                     
-                    def format_album_option(album_dict):
-                        return f"({album_dict.get('year', '????')}) - {album_dict.get('title', '???')}"
+#                     def format_album_option(album_dict):
+#                         return f"({album_dict.get('year', '????')}) - {album_dict.get('title', '???')}"
 
-                    selected_album = st.selectbox(
-                        "Select Album:", 
-                        options=st.session_state['catalog_albums'], 
-                        format_func=format_album_option,
-                        index=None,
-                        placeholder="Choose an album to view tracks...",
-                        key="cat_album_sel"
-                    )
+#                     selected_album = st.selectbox(
+#                         "Select Album:", 
+#                         options=st.session_state['catalog_albums'], 
+#                         format_func=format_album_option,
+#                         index=None,
+#                         placeholder="Choose an album to view tracks...",
+#                         key="cat_album_sel"
+#                     )
 
-                    if selected_album:
-                        album_id = selected_album.get("id")
-                        album_title = selected_album.get("title")
+#                     if selected_album:
+#                         album_id = selected_album.get("id")
+#                         album_title = selected_album.get("title")
                         
-                        # Fetch tracks only if selection changed
-                        if st.session_state.get('current_album_name') != album_title:
-                            with st.spinner(f"Loading tracks..."):
-                                try:
-                                    tracks = cached_get_rb_album_tracks(album_id)
-                                    st.session_state['current_album_tracks'] = tracks
-                                    st.session_state['current_album_name'] = album_title
-                                except Exception as e:
-                                    st.error(f"Failed to load tracks: {e}")
+#                         # Fetch tracks only if selection changed
+#                         if st.session_state.get('current_album_name') != album_title:
+#                             with st.spinner(f"Loading tracks..."):
+#                                 try:
+#                                     tracks = cached_get_rb_album_tracks(album_id)
+#                                     st.session_state['current_album_tracks'] = tracks
+#                                     st.session_state['current_album_name'] = album_title
+#                                 except Exception as e:
+#                                     st.error(f"Failed to load tracks: {e}")
 
-                    # 5. TRACK SELECTION & ANALYSIS
-                    if st.session_state.get('current_album_tracks'):
-                        st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
+#                     # 5. TRACK SELECTION & ANALYSIS
+#                     if st.session_state.get('current_album_tracks'):
+#                         st.markdown(f"### 🎵 Tracks: {st.session_state['current_album_name']}")
                         
-                        def format_track_option(track_dict):
-                            # t_num = track_dict.get('track_number', '?')
-                            t_title = track_dict.get('title', 'Unknown')
-                            t_type = track_dict.get('track_type', 'studio').lower()
+#                         def format_track_option(track_dict):
+#                             # t_num = track_dict.get('track_number', '?')
+#                             t_title = track_dict.get('title', 'Unknown')
+#                             t_type = track_dict.get('track_type', 'studio').lower()
                             
-                            badges = {
-                                "studio": "🎧 [STUDIO]", "live": "🎸 [LIVE]", "remix": "🎛️ [REMIX]",
-                                "acoustic": "🪵 [ACOUSTIC]", "instrumental": "🎹 [INSTRUMENTAL]", "demo": "📝 [DEMO]"
-                            }
-                            return f"{badges.get(t_type, '🎧 [STUDIO]')} {t_title}"
+#                             badges = {
+#                                 "studio": "🎧 [STUDIO]", "live": "🎸 [LIVE]", "remix": "🎛️ [REMIX]",
+#                                 "acoustic": "🪵 [ACOUSTIC]", "instrumental": "🎹 [INSTRUMENTAL]", "demo": "📝 [DEMO]"
+#                             }
+#                             return f"{badges.get(t_type, '🎧 [STUDIO]')} {t_title}"
 
-                        selected_track = st.selectbox(
-                            "Select a track to analyze:", 
-                            options=st.session_state['current_album_tracks'],
-                            format_func=format_track_option,
-                            index=None,
-                            placeholder="Choose a track...",
-                            key="cat_track_sel"
-                        )
+#                         selected_track = st.selectbox(
+#                             "Select a track to analyze:", 
+#                             options=st.session_state['current_album_tracks'],
+#                             format_func=format_track_option,
+#                             index=None,
+#                             placeholder="Choose a track...",
+#                             key="cat_track_sel"
+#                         )
                         
-                        if selected_track:
-                            if st.button("🚀 Analyze Selected Track", type="primary", width='stretch', key="cat_final_load"):
-                                track_id = selected_track.get("id")
-                                track_title = selected_track.get("title")
+#                         if selected_track:
+#                             if st.button("🚀 Analyze Selected Track", type="primary", width='stretch', key="cat_final_load"):
+#                                 track_id = selected_track.get("id")
+#                                 track_title = selected_track.get("title")
                                 
-                                with st.spinner(f"Extracting exact DNA for [{track_title}]..."):
-                                    # Passing rb_artist_id as context to ensure correct artist focus in Hero Card
-                                    res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
+#                                 with st.spinner(f"Extracting exact DNA for [{track_title}]..."):
+#                                     # Passing rb_artist_id as context to ensure correct artist focus in Hero Card
+#                                     res = backend.get_inference_data_by_id(track_id, context_artist_id=rb_artist_id)
                                     
-                                    if res.get("success"):
-                                        st.session_state.live_payload = res["inference_payload"]
+#                                     if res.get("success"):
+#                                         st.session_state.live_payload = res["inference_payload"]
                                         
-                                        # UI TWEAK: Restore album name from session if missing in payload
-                                        if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
-                                            st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
+#                                         # UI TWEAK: Restore album name from session if missing in payload
+#                                         if st.session_state.live_payload.get("album") in ["Unknown Album", ""]:
+#                                             st.session_state.live_payload["album"] = st.session_state.get("current_album_name", "Unknown Album")
                                         
-                                        # Refresh Last.fm Context
-                                        lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
-                                        st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
-                                        st.session_state.lastfm_tags = lfm.get("tags", [])
+#                                         # Refresh Last.fm Context
+#                                         lfm = get_lastfm_data(st.session_state.live_payload.get("artist", ""))
+#                                         st.session_state.live_payload["artist_lastfm_listeners_log"] = lfm.get("listeners_log", 15.0)
+#                                         st.session_state.lastfm_tags = lfm.get("tags", [])
 
-                                        if rb_artist_id:
-                                            cached_get_artist_evolution(rb_artist_id)
+#                                         if rb_artist_id:
+#                                             cached_get_artist_evolution(rb_artist_id)
                                         
-                                        st.session_state.search_error = None
-                                        st.session_state.search_warning = None
-                                        st.rerun()
-                                    else:
-                                        st.error("Could not load track data. Try again.")
+#                                         st.session_state.search_error = None
+#                                         st.session_state.search_warning = None
+#                                         st.rerun()
+#                                     else:
+#                                         st.error("Could not load track data. Try again.")
 
 
-# --- ANALYTICS TAB ---
+# # --- ANALYTICS TAB ---
 # --- ANALYTICS TAB ---
 with tab_analytics:
     if not active_payload or not active_payload.get("rb_artist_id"):
