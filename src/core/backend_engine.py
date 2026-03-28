@@ -205,7 +205,6 @@ class PopForecastInferenceBackend:
             # PLAN C: Graceful Degradation (Artist-Only Match)
             logging.warning("YTMusic Fallback exhausted or failed. Routing to Artist Discography.")
             
-            # Fetch a pool of 5 artists to avoid fuzzy mismatches (e.g., "Gilberto Gil Hernandez")
             artist_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 5})
             artists = artist_res.get("content", []) if isinstance(artist_res, dict) else []
             
@@ -541,6 +540,8 @@ class PopForecastInferenceBackend:
         """ Fetches full paginated albums directly from ReccoBeats, deduplicating by exact name. """
         if not artist_id: return []
         
+        logger.info(f"📂 [Catalog Explorer] Iniciando extração de catálogo para Artist ID: {artist_id}")
+        
         all_raw_items = []
         current_page = 0
         total_pages = 1
@@ -551,6 +552,7 @@ class PopForecastInferenceBackend:
             data = self._request_json(f"{self.rb_url}/artist/{artist_id}/album", self.rb_headers, params)
             
             if "_error" in data:
+                logger.error(f"❌ [Catalog Explorer] Erro ao buscar álbuns: {data['_error']}")
                 break
                 
             if current_page == 0:
@@ -560,26 +562,50 @@ class PopForecastInferenceBackend:
             all_raw_items.extend(items)
             current_page += 1
             
+        logger.info(f"📥 [Catalog Explorer] Download concluído: {len(all_raw_items)} itens brutos encontrados em {total_pages} página(s).")
+            
         # 2. Motor de Deduplicação (Highest Popularity Wins)
         albums_dict = {}
+        type_distribution = {"Album": 0, "Single": 0, "Compilation": 0, "Unknown": 0}
+        
         for alb in all_raw_items:
             title = alb.get("name", "")
             if not title: continue
                 
             pop = int(alb.get("popularity", 0))
             title_key = title.lower().strip()
+            raw_type = alb.get("albumType", alb.get("album_type", "Unknown")).title()
             
             if title_key not in albums_dict or pop > albums_dict[title_key]["popularity"]:
                 albums_dict[title_key] = {
                     "id": alb.get("id"),
                     "title": title,
                     "year": str(alb.get("releaseDate", alb.get("release_date", "0000")))[:4],
-                    "type": alb.get("albumType", alb.get("album_type", "Unknown")).title(),
+                    "type": raw_type,
                     "popularity": pop
                 }
                 
+        # Contagem para telemetria estrutural
+        for alb in albums_dict.values():
+            t = alb["type"]
+            if t in type_distribution:
+                type_distribution[t] += 1
+            else:
+                type_distribution["Unknown"] += 1
+                
+        logger.info(f"📊 [Catalog Explorer] Distribuição do catálogo: {type_distribution}")
+                
         # 3. Ordenação Temporal
         sorted_albums = sorted(list(albums_dict.values()), key=lambda x: x["year"] if x["year"].isdigit() else "0000", reverse=True)
+        
+        logger.info(f"🗃️ [Catalog Explorer] Catálogo final filtrado: {len(sorted_albums)} itens únicos.")
+        
+        # 4. Amostragem da "sujeira" (Os 5 itens menos populares)
+        if sorted_albums:
+            bottom_5 = sorted(sorted_albums, key=lambda x: x["popularity"])[:5]
+            weird_names = [f"'{a['title']}' (Pop: {a['popularity']}, Tipo: {a['type']})" for a in bottom_5]
+            logger.warning(f"🧟 [Catalog Explorer] Alerta de Sujeira! Os 5 itens MENOS populares retornados: {', '.join(weird_names)}")
+            
         return sorted_albums
 
     def get_rb_album_tracks(self, album_id: str) -> List[Dict]:
