@@ -164,33 +164,49 @@ class PopForecastInferenceBackend:
                 yt_results = yt.search(f"{artist_name} {track_title}", filter="songs")
                 
                 if yt_results:
-                    yt_album = yt_results[0].get("album", {}).get("name", "")
+                    # Strip quotes to prevent API search failures
+                    yt_album = yt_results[0].get("album", {}).get("name", "").replace('"', '').strip()
+                    
                     if yt_album:
-                        logging.info(f"YTMusic suggested album: '{yt_album}'. Searching ReccoBeats...")
+                        # NEW APPROACH: Use Album Search with a wider net (size: 20)
+                        search_query = f"{artist_name} {yt_album}"
+                        logging.info(f"YTMusic tip: '{yt_album}'. Performing Deep Album Search in RB for: '{search_query}'...")
                         
-                        # 1. Search RB for the exact album 
-                        album_search_res = self._request_json(f"{self.rb_url}/album/search", self.rb_headers, {"searchText": yt_album, "size": 5})
+                        # Request 20 albums to bypass live versions and remasters crowding the top 5
+                        album_search_res = self._request_json(f"{self.rb_url}/album/search", self.rb_headers, {"searchText": search_query, "size": 20})
                         rb_albums = album_search_res.get("content", []) if isinstance(album_search_res, dict) else []
+                        
+                        # RADAR: Log the top suspects returned by ReccoBeats to diagnose API sorting
+                        found_album_names = [a.get("name", "Unknown") for a in rb_albums[:5]]
+                        logging.info(f"Top 5 albums returned by RB Search: {found_album_names}")
                         
                         target_track_id = None
                         
-                        # 2. Look through the found albums' tracks 
+                        # Iterate through the matched albums
                         for alb in rb_albums:
+                            alb_name = alb.get("name", "")
                             alb_id = alb.get("id")
+                            
+                            # Optimization: Skip fetching tracks if the album name is completely unrelated
+                            if yt_album.lower() not in alb_name.lower() and alb_name.lower() not in yt_album.lower():
+                                continue
+
                             tracks_res = self._request_json(f"{self.rb_url}/album/{alb_id}/track", self.rb_headers, {"size": 50})
                             rb_tracks = tracks_res.get("content", []) if isinstance(tracks_res, dict) else []
                             
                             for t in rb_tracks:
-                                if self._normalize(track_title) in self._normalize(t.get("trackTitle", "")):
+                                rb_t_norm = self._normalize(t.get("trackTitle", ""))
+                                # Lenient match for the track title
+                                if t_norm in rb_t_norm or rb_t_norm in t_norm:
                                     target_track_id = t.get("id")
+                                    logging.info(f"🎯 Target track '{t.get('trackTitle')}' found inside album: '{alb_name}'!")
                                     break
                             
                             if target_track_id:
                                 break
                                 
-                        # 3. If we found the track ID via YTMusic's tip, delegate to the main ID method
                         if target_track_id:
-                            logging.info(f"YTMusic Fallback Success! Track ID found: {target_track_id}")
+                            logging.info(f"✅ YTMusic Fallback Success! Track ID found: {target_track_id}")
                             delegated_payload = self.get_inference_data_by_id(
                                 track_id=target_track_id, 
                                 context_artist_id=context_artist_id
@@ -200,29 +216,47 @@ class PopForecastInferenceBackend:
                             return delegated_payload
                             
             except Exception as e:
-                logging.error(f"YTMusic Fallback encountered an error: {e}")
+                logging.error(f"❌ YTMusic Fallback encountered an error: {e}")
 
-            # PLAN C: Graceful Degradation (Artist-Only Match)
+            # ---------------------------------------------------------
+            # PLAN C: Graceful Degradation (Artist-Only Match with Deep Pulse Check)
+            # ---------------------------------------------------------
             logging.warning("YTMusic Fallback exhausted or failed. Routing to Artist Discography.")
             
-            artist_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 5})
+            artist_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 10})
             artists = artist_res.get("content", []) if isinstance(artist_res, dict) else []
             
             if artists:
-                # Default to the first result, but actively hunt for an exact match
-                matched_artist = artists[0] 
+                valid_artists = []
+                
                 for a in artists:
-                    if a.get("name", "").lower() == artist_name.lower():
-                        matched_artist = a
-                        break
+                    # Lenient artist name matching
+                    if any(part in a.get("name", "").lower() for part in artist_name.lower().split()):
+                        test_id = a.get("id")
                         
+                        # THE PULSE CHECK: Fetch a sample of albums to measure true market relevance
+                        album_check = self._request_json(f"{self.rb_url}/artist/{test_id}/album", self.rb_headers, {"size": 3})
+                        
+                        if isinstance(album_check, dict) and album_check.get("content"):
+                            albums = album_check["content"]
+                            # Rank homonyms by the popularity of their top album (dodging DJs/Covers)
+                            max_pop = max([int(alb.get("popularity", 0)) for alb in albums])
+                            valid_artists.append({"artist": a, "max_pop": max_pop})
+                            
+                if valid_artists:
+                    valid_artists.sort(key=lambda x: x["max_pop"], reverse=True)
+                    valid_artist = valid_artists[0]["artist"]
+                    logging.info(f"Pulse Check selected '{valid_artist.get('name')}' with max album pop {valid_artists[0]['max_pop']}.")
+                else:
+                    valid_artist = artists[0]
+
                 return {
                     "success": True, 
                     "is_artist_only_fallback": True, 
-                    "message": f"Track not found. Routing to {matched_artist.get('name')}'s catalog.",
+                    "message": f"Track not found. Routing to {valid_artist.get('name')}'s catalog.",
                     "artist_fallback_data": {
-                        "id": matched_artist.get("id"),
-                        "name": matched_artist.get("name")
+                        "id": valid_artist.get("id"),
+                        "name": valid_artist.get("name")
                     }
                 }
             else:
