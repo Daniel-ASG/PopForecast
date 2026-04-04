@@ -372,45 +372,171 @@ class PopForecastInferenceBackend:
     # =====================================================================
     # MODO PROFUNDO (LENTO): Acionado apenas sob demanda (Streamlit)
     # =====================================================================
-    def build_curator_menu(self, raw_alternatives: List[Dict]) -> List[Dict]:
-        """ Recebe a lista crua do get_inference_data e constrói o menu completo """
-        logger.info(f"Acionando Busca Profunda para {len(raw_alternatives)} faixas...")
-        
-        def fetch_album_data(track: Dict) -> Dict:
-            alb_res = self._request_json(f"{self.rb_url}/track/{track['id']}/album", self.rb_headers)
+
+
+    def _build_curator_menu_from_raw_alternatives(
+        self,
+        raw_alternatives: List[Dict]
+    ) -> List[Dict]:
+        """
+        Legacy curator path based only on raw_alternatives.
+        Preserved as a safe fallback during controlled integration.
+        """
+        logger.info(
+            f"Acionando Curator Menu legado para {len(raw_alternatives)} faixas..."
+        )
+
+        def fetch_album_data(track: Dict[str, Any]) -> Dict[str, Any]:
+            alb_res = self._request_json(
+                f"{self.rb_url}/track/{track['id']}",
+                self.rb_headers
+            )
+
             album_name = "Unknown Album"
-            release_year = "0000"
-            
-            if "_error" not in alb_res and alb_res.get("content"):
-                best_album = max(alb_res["content"], key=lambda x: x.get("popularity", 0))
-                album_name = best_album.get("name", "Unknown Album")
-                release_year = str(best_album.get("releaseDate", "0000"))[:4]
-                
+            release_year = "????"
+
+            if "_error" not in alb_res and isinstance(alb_res, dict):
+                embedded_album = alb_res.get("album")
+                if embedded_album:
+                    album_name = embedded_album.get("name", "Unknown Album")
+                    release_date = str(
+                        embedded_album.get(
+                            "releaseDate",
+                            embedded_album.get("release_date", "")
+                        )
+                    )
+                    if release_date[:4].isdigit():
+                        release_year = release_date[:4]
+                else:
+                    album_res = self._request_json(
+                        f"{self.rb_url}/track/{track['id']}/album",
+                        self.rb_headers
+                    )
+                    if "_error" not in album_res and album_res.get("content"):
+                        best_album = max(
+                            album_res["content"],
+                            key=lambda x: x.get("popularity", 0)
+                        )
+                        album_name = best_album.get("name", "Unknown Album")
+                        release_date = str(best_album.get("releaseDate", ""))
+                        if release_date[:4].isdigit():
+                            release_year = release_date[:4]
+
             return {
                 "id": track.get("id"),
                 "title": track.get("trackTitle"),
                 "popularity": int(track.get("popularity", 0) or 0),
                 "album": album_name,
-                "year": release_year if release_year != "0000" else "????",
+                "year": release_year,
                 "isrc": track.get("isrc"),
-                "link": track.get("href", "")
+                "link": track.get("href", ""),
             }
 
-        all_versions = []
-        # Paralelismo isolado aqui. Vai doer o Rate Limit, mas só quando o usuário clicar!
+        all_versions: List[Dict[str, Any]] = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(fetch_album_data, track) for track in raw_alternatives]
+            futures = [
+                executor.submit(fetch_album_data, track)
+                for track in raw_alternatives
+                if track.get("id")
+            ]
             for future in concurrent.futures.as_completed(futures):
                 all_versions.append(future.result())
 
-        unique_versions = {}
-        for v in all_versions:
-            k = f"{self._normalize(v['title'])}::{v['album']}"
-            if k not in unique_versions or v['popularity'] > unique_versions[k]['popularity']:
-                unique_versions[k] = v
+        unique_versions: Dict[str, Dict[str, Any]] = {}
+        for version in all_versions:
+            key = f"{self._normalize(version['title'])}::{version['album']}"
+            if (
+                key not in unique_versions
+                or version["popularity"] > unique_versions[key]["popularity"]
+            ):
+                unique_versions[key] = version
 
-        final_menu = sorted(list(unique_versions.values()), key=lambda x: x["popularity"], reverse=True)
+        final_menu = sorted(
+            list(unique_versions.values()),
+            key=lambda item: item["popularity"],
+            reverse=True,
+        )
         return final_menu
+    
+    def _format_harvested_variants_for_curator_menu(
+        self,
+        harvested_variants: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Converts harvested catalog variants into the legacy curator menu contract
+        expected by the frontend table.
+        """
+        formatted_menu: List[Dict[str, Any]] = []
+
+        for item in harvested_variants:
+            year_value = item.get("year", 0)
+            formatted_menu.append(
+                {
+                    "id": item.get("track_id"),
+                    "title": item.get("title"),
+                    "popularity": int(item.get("popularity", 0) or 0),
+                    "album": item.get("album", "Unknown Album"),
+                    "year": str(year_value) if year_value else "????",
+                    "isrc": item.get("isrc", ""),
+                    "link": item.get("link", ""),
+                    # Extra metadata kept for future UI upgrades
+                    "track_type": item.get("track_type", "other"),
+                    "track_type_source": item.get("track_type_source", "unknown"),
+                    "match_quality": item.get("match_quality", "base_variant"),
+                    "canonicality_score": item.get("canonicality_score", 0),
+                    "canonicality_tags": item.get("canonicality_tags", []),
+                }
+            )
+
+        return formatted_menu
+    
+    def build_curator_menu(
+        self,
+        raw_alternatives: List[Dict],
+        rb_artist_id: Optional[str] = None,
+        track_title: Optional[str] = None,
+    ) -> List[Dict]:
+        """
+        Controlled integration entrypoint for the curator menu.
+
+        Strategy:
+        1. Try the new catalog harvester when rb_artist_id and track_title exist.
+        2. If harvesting fails or returns nothing, fall back to the legacy menu
+           built from raw_alternatives.
+        """
+        logger.info(
+            "Acionando Curator Menu controlado | "
+            f"raw_alternatives={len(raw_alternatives)} | "
+            f"rb_artist_id={rb_artist_id} | track_title={track_title}"
+        )
+
+        if rb_artist_id and track_title:
+            try:
+                harvested_variants = self._harvest_rb_track_variants_from_catalog(
+                    artist_id=rb_artist_id,
+                    track_title=track_title,
+                )
+
+                if harvested_variants:
+                    logger.info(
+                        f"✅ Novo harvester retornou {len(harvested_variants)} variantes."
+                    )
+                    return self._format_harvested_variants_for_curator_menu(
+                        harvested_variants
+                    )
+
+                logger.warning(
+                    "⚠️ Novo harvester retornou vazio. "
+                    "Falling back to legacy raw_alternatives menu."
+                )
+
+            except Exception as exc:
+                logger.error(
+                    f"❌ New curator harvester failed: {exc}. "
+                    "Falling back to legacy raw_alternatives menu."
+                )
+
+        return self._build_curator_menu_from_raw_alternatives(raw_alternatives)
     
 
     def _triangulate_rb_artist_id_batch(self, artist_name: str) -> str:
@@ -781,6 +907,438 @@ class PopForecastInferenceBackend:
             
         return sorted(tracks, key=lambda x: x["track_number"])
     
+    def _normalize_track_variant_title(self, title: str) -> Dict[str, Any]:
+        """
+        Normalizes a track title for variant harvesting without discarding
+        important semantics such as 'feat', 'live', 'remix', or 'demo'.
+
+        Important:
+        This method intentionally does NOT reuse self._normalize() directly,
+        because the generic normalizer strips parenthetical content and would
+        erase variant semantics that are crucial for harvesting.
+        """
+        raw_title = str(title or "").strip()
+        lowered = raw_title.lower()
+
+        # Keep semantic content first; only remove punctuation later.
+        full_normalized = re.sub(r"[^\w\s]", " ", lowered)
+        full_normalized = re.sub(r"\s+", " ", full_normalized).strip()
+
+        variant_terms = {
+            "live": bool(re.search(r"\blive\b|\bao vivo\b", full_normalized)),
+            "acoustic": bool(re.search(r"\bacoustic\b|\bacústico\b|\bunplugged\b", full_normalized)),
+            "demo": bool(re.search(r"\bdemo\b|\brehearsal\b", full_normalized)),
+            "remix": bool(re.search(r"\bremix\b|\bmix\b", full_normalized)),
+            "remaster": bool(re.search(r"\bremaster\b|\bremastered\b", full_normalized)),
+            "edit": bool(re.search(r"\bedit\b|\bradio edit\b", full_normalized)),
+            "version": bool(re.search(r"\bversion\b", full_normalized)),
+            "instrumental": bool(re.search(r"\binstrumental\b", full_normalized)),
+            "featured": bool(re.search(r"\bfeat\b|\bft\b|\bfeaturing\b", full_normalized)),
+        }
+
+        base_title = lowered
+
+        # Remove explicit featured segments.
+        featured_patterns = [
+            r"\((?:feat|ft|featuring)\.?\s+[^)]*\)",
+            r"\[(?:feat|ft|featuring)\.?\s+[^\]]*\]",
+            r"\s+(?:feat|ft|featuring)\.?\s+.+$",
+        ]
+        for pattern in featured_patterns:
+            base_title = re.sub(pattern, " ", base_title, flags=re.IGNORECASE)
+
+        # Remove parenthetical / bracketed segments when they clearly describe a variant.
+        variant_group = (
+            r"live|ao vivo|acoustic|acústico|unplugged|demo|rehearsal|"
+            r"remaster(?:ed)?|remix|mix|radio edit|edit|version|instrumental"
+        )
+        bracket_variant_patterns = [
+            rf"\([^)]*\b(?:{variant_group})\b[^)]*\)",
+            rf"\[[^\]]*\b(?:{variant_group})\b[^\]]*\]",
+        ]
+        for pattern in bracket_variant_patterns:
+            base_title = re.sub(pattern, " ", base_title, flags=re.IGNORECASE)
+
+        # Remove dash-suffixed variant descriptors such as:
+        # "Cheap Thrills - Hex Cougar Remix"
+        # "Smells Like Teen Spirit - Rehearsal Demo"
+        # "Duality - Live"
+        dash_variant_pattern = rf"\s*-\s*.*\b(?:{variant_group})\b.*$"
+        base_title = re.sub(dash_variant_pattern, " ", base_title, flags=re.IGNORECASE)
+
+        # Final cleanup.
+        base_title = re.sub(r"[^\w\s]", " ", base_title)
+        base_title = re.sub(r"\s+", " ", base_title).strip()
+
+        return {
+            "raw_title": raw_title,
+            "normalized_title": full_normalized,
+            "base_title": base_title,
+            "variant_terms": variant_terms,
+            "is_featured": variant_terms["featured"],
+        }
+
+
+    def _infer_contextual_track_type(
+        self,
+        track_title: str,
+        album_title: str,
+        album_type: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Infers track type using both the track title and the album context.
+
+        This is intentionally separate from get_rb_album_tracks(), because we do
+        not want to alter that method's contract yet. The goal here is to make
+        harvesting smarter without risking regressions in other catalog consumers.
+        """
+        track_meta = self._normalize_track_variant_title(track_title)
+        track_terms = track_meta["variant_terms"]
+
+        album_title_norm = re.sub(r"[^\w\s]", " ", str(album_title or "").lower())
+        album_title_norm = re.sub(r"\s+", " ", album_title_norm).strip()
+        album_type_norm = str(album_type or "").lower().strip()
+
+        album_flags = {
+            "live": bool(
+                re.search(
+                    r"\blive\b|\bao vivo\b|\bbroadcast\b|\bunplugged\b|"
+                    r"\breading\b|\bparamount\b|\bfestival\b|\bconcert\b",
+                    album_title_norm
+                )
+            ),
+            "remix": bool(re.search(r"\bremix\b|\bremixes\b|\bmix\b", album_title_norm)),
+            "acoustic": bool(re.search(r"\bacoustic\b|\bacústico\b|\bunplugged\b", album_title_norm)),
+            "demo": bool(re.search(r"\bdemo\b|\brehearsal\b|\bouttake\b|\bboombox\b", album_title_norm)),
+            "instrumental": bool(re.search(r"\binstrumental\b", album_title_norm)),
+            "compilation_like": bool(
+                album_type_norm == "compilation" or
+                re.search(
+                    r"\bcollection\b|\bgreatest hits\b|\bbest of\b|\bessential\b|"
+                    r"\bicon\b|\binternational version\b",
+                    album_title_norm
+                )
+            ),
+        }
+
+        # Track title always has priority.
+        if track_terms["live"]:
+            track_type = "live"
+            source = "track_title"
+        elif track_terms["remix"]:
+            track_type = "remix"
+            source = "track_title"
+        elif track_terms["acoustic"]:
+            track_type = "acoustic"
+            source = "track_title"
+        elif track_terms["demo"]:
+            track_type = "demo"
+            source = "track_title"
+        elif track_terms["instrumental"]:
+            track_type = "instrumental"
+            source = "track_title"
+        # Album context can override a "clean" title.
+        elif album_flags["live"]:
+            track_type = "live"
+            source = "album_context"
+        elif album_flags["remix"]:
+            track_type = "remix"
+            source = "album_context"
+        elif album_flags["acoustic"]:
+            track_type = "acoustic"
+            source = "album_context"
+        elif album_flags["demo"]:
+            track_type = "demo"
+            source = "album_context"
+        elif album_flags["instrumental"]:
+            track_type = "instrumental"
+            source = "album_context"
+        else:
+            track_type = "studio"
+            source = "default"
+
+        return {
+            "track_type": track_type,
+            "source": source,
+            "album_flags": album_flags,
+            "track_terms": track_terms,
+        }
+
+    def _score_catalog_album_canonicality(
+        self,
+        album_title: str,
+        album_type: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Scores how canonical/trustworthy an album context is for representing a
+        target track in a curator menu.
+
+        Higher score = better representative context.
+        """
+        album_title_norm = re.sub(r"[^\w\s]", " ", str(album_title or "").lower())
+        album_title_norm = re.sub(r"\s+", " ", album_title_norm).strip()
+        album_type_norm = str(album_type or "").lower().strip()
+
+        score = 0
+        tags: List[str] = []
+
+        # Base score from album type
+        if album_type_norm == "album":
+            score += 40
+            tags.append("album")
+        elif album_type_norm == "single":
+            score += 35
+            tags.append("single")
+        elif album_type_norm == "ep":
+            score += 30
+            tags.append("ep")
+        elif album_type_norm == "compilation":
+            score -= 120
+            tags.append("compilation")
+        else:
+            tags.append("unknown_type")
+
+        penalties = [
+            (
+                r"\bcollection\b|\bgreatest hits\b|\bbest of\b|\bessential\b|"
+                r"\bicon\b|\banthology\b|\bplaylist\b",
+                -140,
+                "compilation_title",
+            ),
+            (r"\binternational version\b", -80, "regional_variant"),
+            (
+                r"\blive\b|\bbroadcast\b|\bunplugged\b|\breading\b|\bparamount\b|"
+                r"\bfestival\b|\bconcert\b",
+                -120,
+                "live_context",
+            ),
+            (r"\bremix\b|\bremixes\b|\bmix\b", -70, "remix_context"),
+            (r"\bdemo\b|\brehearsal\b|\bouttake\b|\bboombox\b", -90, "demo_context"),
+            (r"\bdeluxe\b|\bsuper deluxe\b|\banniversary\b", -20, "reissue_context"),
+            (r"\bremaster\b|\bremastered\b", -10, "remaster_context"),
+        ]
+
+        for pattern, penalty, label in penalties:
+            if re.search(pattern, album_title_norm):
+                score += penalty
+                tags.append(label)
+
+        editorial_tags = {
+            "compilation",
+            "compilation_title",
+            "regional_variant",
+        }
+        is_editorial_context = any(tag in editorial_tags for tag in tags)
+
+        return {
+            "canonicality_score": score,
+            "canonicality_tags": tags,
+            "is_editorial_context": is_editorial_context,
+        }
+
+    def _build_variant_representative_key(self, item: Dict[str, Any]) -> Any:
+        """
+        Builds a representative key that collapses operational duplicates across
+        albums/releases while preserving semantically distinct variants.
+
+        Important:
+        We intentionally key by normalized_title instead of ISRC here.
+        Different releases/compilations may carry different ISRCs for what is
+        effectively the same representative menu entry.
+        """
+        return (
+            item["variant_group_key"],
+            item["track_type"],
+            item["is_featured_variant"],
+            item["normalized_title"],
+        )
+
+    def _harvest_rb_track_variants_from_catalog(
+        self,
+        artist_id: str,
+        track_title: str,
+        max_albums: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Harvests plausible variants of a target track from the full RB artist catalog.
+
+        Phase 3B:
+        - uses album context to classify track type more accurately
+        - introduces album canonicality scoring
+        - collapses operational duplicates across albums more aggressively
+        """
+        if not artist_id or not track_title:
+            return []
+
+        target_meta = self._normalize_track_variant_title(track_title)
+        target_base_title = target_meta["base_title"]
+
+        if not target_base_title:
+            return []
+
+        catalog = self.get_rb_artist_catalog(artist_id)
+        if not catalog:
+            return []
+
+        albums_to_scan = catalog if max_albums is None else catalog[:max_albums]
+
+        match_rank = {
+            "exact": 0,
+            "featured_variant": 1,
+            "base_variant": 2,
+        }
+        track_type_rank = {
+            "studio": 0,
+            "acoustic": 1,
+            "live": 2,
+            "demo": 3,
+            "remix": 4,
+            "instrumental": 5,
+            "other": 6,
+        }
+
+        harvested_variants: Dict[Any, Dict[str, Any]] = {}
+
+        def is_better_representative(new_item: Dict[str, Any], old_item: Dict[str, Any]) -> bool:
+            new_score = (
+                -match_rank.get(new_item["match_quality"], 99),
+                -track_type_rank.get(new_item["track_type"], 99),
+                int(new_item["canonicality_score"]),
+                int(new_item["popularity"]),
+                int(new_item["album_popularity"]),
+                -int(new_item["year"]) if int(new_item["year"]) > 0 else -9999,
+            )
+            old_score = (
+                -match_rank.get(old_item["match_quality"], 99),
+                -track_type_rank.get(old_item["track_type"], 99),
+                int(old_item["canonicality_score"]),
+                int(old_item["popularity"]),
+                int(old_item["album_popularity"]),
+                -int(old_item["year"]) if int(old_item["year"]) > 0 else -9999,
+            )
+            return new_score > old_score
+
+        for album in albums_to_scan:
+            album_id = album.get("id")
+            if not album_id:
+                continue
+
+            album_title = album.get("title", "Unknown Album")
+            album_type = album.get("type", "Unknown")
+            album_popularity = int(album.get("popularity", 0) or 0)
+
+            canonical_meta = self._score_catalog_album_canonicality(
+                album_title=album_title,
+                album_type=album_type,
+            )
+
+            album_tracks = self.get_rb_album_tracks(album_id)
+            if not album_tracks:
+                continue
+
+            for candidate_track in album_tracks:
+                candidate_title = candidate_track.get("title", "")
+                candidate_meta = self._normalize_track_variant_title(candidate_title)
+
+                if candidate_meta["base_title"] != target_base_title:
+                    continue
+
+
+
+                track_id = candidate_track.get("id")
+                if not track_id:
+                    continue
+
+                track_payload = self._request_json(
+                    f"{self.rb_url}/track/{track_id}",
+                    self.rb_headers
+                )
+
+                if "content" in track_payload and isinstance(track_payload["content"], dict):
+                    track_payload = track_payload["content"]
+
+                if "_error" in track_payload or not isinstance(track_payload, dict) or not track_payload:
+                    continue
+
+                contextual_track_meta = self._infer_contextual_track_type(
+                    track_title=candidate_title,
+                    album_title=album_title,
+                    album_type=album_type,
+                )
+                track_type = contextual_track_meta["track_type"]
+                if track_type not in track_type_rank:
+                    track_type = "other"
+
+                if candidate_meta["normalized_title"] == target_meta["normalized_title"]:
+                    match_quality = "exact"
+                elif candidate_meta["is_featured"] != target_meta["is_featured"]:
+                    match_quality = "featured_variant"
+                else:
+                    match_quality = "base_variant"
+
+                if (
+                    match_quality == "exact"
+                    and track_type != "studio"
+                    and contextual_track_meta["source"] == "album_context"
+                ):
+                    match_quality = "base_variant"
+
+
+
+
+
+
+                track_popularity = int(track_payload.get("popularity", 0) or 0)
+                track_isrc = track_payload.get("isrc", "")
+                track_link = track_payload.get("href", "")
+
+                year_value = album.get("year", "0000")
+                year_int = int(year_value) if str(year_value).isdigit() else 0
+
+                item = {
+                    "track_id": track_id,
+                    "title": candidate_title,
+                    "normalized_title": candidate_meta["normalized_title"],
+                    "variant_group_key": candidate_meta["base_title"],
+                    "album_id": album_id,
+                    "album": album_title,
+                    "year": year_int,
+                    "album_type": album_type,
+                    "album_popularity": album_popularity,
+                    "track_type": track_type,
+                    "track_type_source": contextual_track_meta["source"],
+                    "popularity": track_popularity,
+                    "isrc": track_isrc,
+                    "link": track_link,
+                    "match_quality": match_quality,
+                    "is_featured_variant": candidate_meta["is_featured"],
+                    "canonicality_score": canonical_meta["canonicality_score"],
+                    "canonicality_tags": canonical_meta["canonicality_tags"],
+                    "is_editorial_context": canonical_meta["is_editorial_context"],
+                }
+
+                # Collapse operational duplicates across compilations/reissues.
+                dedupe_key = self._build_variant_representative_key(item)
+
+                previous = harvested_variants.get(dedupe_key)
+                if previous is None or is_better_representative(item, previous):
+                    harvested_variants[dedupe_key] = item
+
+        final_variants = list(harvested_variants.values())
+
+        final_variants.sort(
+            key=lambda item: (
+                match_rank.get(item["match_quality"], 99),
+                track_type_rank.get(item["track_type"], 99),
+                -int(item["canonicality_score"]),
+                -int(item["popularity"]),
+                -int(item["album_popularity"]),
+                int(item["year"]) if int(item["year"]) > 0 else 9999,
+            )
+        )
+
+        return final_variants
+
     def get_artist_evolution(self, artist_id: str) -> List[Dict]:
         """ 
         Aggregates acoustic DNA over time by sampling the most popular album per year.
