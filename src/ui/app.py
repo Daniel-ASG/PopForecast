@@ -144,8 +144,12 @@ def cached_get_rb_album_tracks(album_id):
     return backend.get_rb_album_tracks(album_id)
 
 @st.cache_data(ttl=86400, show_spinner=False)
-def cached_build_curator_menu(raw_alternatives):
-    return backend.build_curator_menu(raw_alternatives)
+def cached_build_curator_menu(raw_alternatives, rb_artist_id=None, track_title=None):
+    return backend.build_curator_menu(
+        raw_alternatives=raw_alternatives,
+        rb_artist_id=rb_artist_id,
+        track_title=track_title,
+    )
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def cached_get_artist_evolution(artist_id):
@@ -801,7 +805,11 @@ with tab_simulator:
                 st.markdown("Deep search for Remasters, Acoustics, and Live versions.")
                 if st.button("Trigger Deep Search"):
                     with st.spinner("Handling API rate limits and building the menu — this may take a few seconds."):
-                        menu = cached_build_curator_menu(active_payload.get("raw_alternatives", []))
+                        menu = cached_build_curator_menu(
+                            raw_alternatives=active_payload.get("raw_alternatives", []),
+                            rb_artist_id=active_payload.get("rb_artist_id"),
+                            track_title=active_payload.get("title"),
+                        )
                         if menu:
                             df_menu = pd.DataFrame(menu)
                             styled_df = df_menu[['popularity', 'title', 'album', 'year', 'isrc', 'link']].style.background_gradient(cmap='Reds', subset=['popularity'])
