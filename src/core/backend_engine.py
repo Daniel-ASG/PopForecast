@@ -538,84 +538,353 @@ class PopForecastInferenceBackend:
 
         return self._build_curator_menu_from_raw_alternatives(raw_alternatives)
     
+    def _log_timed(self, level: str, start_ts: float, message: str) -> None:
+        """
+        Logs with wall-clock timestamp plus elapsed time since start_ts.
+        Example:
+        [14:32:10 | +02.41s] Message...
+        """
+        from datetime import datetime
+        elapsed = time.perf_counter() - start_ts
+        wall_ts = datetime.now().strftime("%H:%M:%S")
+        prefix = f"[{wall_ts} | +{elapsed:06.2f}s]"
 
+        log_fn = getattr(logger, level, logger.info)
+        log_fn(f"{prefix} {message}")
+
+    def _normalize_artist_name_for_match(self, value: str) -> str:
+        """
+        Accent-insensitive, punctuation-light normalization for artist matching.
+        """
+        import unicodedata
+
+        text = str(value or "").strip().lower()
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = re.sub(r"[^\w\s]", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+
+    def _artist_name_match_score(self, query_name: str, candidate_name: str) -> int:
+        """
+        Conservative name matching score.
+        Higher is better.
+        """
+        q = self._normalize_artist_name_for_match(query_name)
+        c = self._normalize_artist_name_for_match(candidate_name)
+
+        if not q or not c:
+            return 0
+
+        if q == c:
+            return 100
+
+        q_tokens = set(q.split())
+        c_tokens = set(c.split())
+
+        if not q_tokens or not c_tokens:
+            return 0
+
+        if q_tokens == c_tokens:
+            return 95
+
+        if q_tokens.issubset(c_tokens):
+            return 80
+
+        overlap = len(q_tokens & c_tokens)
+        if overlap == 0:
+            return 0
+
+        return int((overlap / len(q_tokens)) * 60)
+    
     def _triangulate_rb_artist_id_batch(self, artist_name: str) -> str:
         """
-        Recovers ReccoBeats Artist ID by first resolving the real MBID, 
-        fetching known ISRCs, and firing a single golden batch request.
+        Safely recovers a ReccoBeats Artist ID by:
+        1) resolving candidate MB artists with conservative name matching
+        2) collecting scout ISRCs from MB recordings
+        3) querying RB in batch
+        4) choosing the RB artist whose name matches the query most strongly
+
+        Important:
+        We no longer trust:
+        - the first MB artist blindly
+        - the first RB batch item blindly
+        - track_data["artistId"] blindly in collaboration-heavy cases
         """
         if not artist_name:
             return ""
 
+        start_ts = time.perf_counter()
+
         import urllib.parse
         import requests
 
-        # Step 0: Resolve the real MBID dynamically
+        mb_headers = {
+            "User-Agent": "AnR_Simulator_Engine/1.0",
+            "Accept": "application/json",
+        }
+
+        # ---------------------------------------------------------
+        # Step 0: Resolve MB artist candidates conservatively
+        # ---------------------------------------------------------
         search_query = urllib.parse.quote(f'artist:"{artist_name}"')
-        mb_search_url = f"https://musicbrainz.org/ws/2/artist/?query={search_query}&limit=1&fmt=json"
-        mb_headers = {"User-Agent": "AnR_Simulator_Engine/1.0", "Accept": "application/json"}
-        
+        mb_search_url = (
+            f"https://musicbrainz.org/ws/2/artist/?query={search_query}&limit=5&fmt=json"
+        )
+
         try:
-            search_res = requests.get(mb_search_url, headers=mb_headers, timeout=5).json()
-            mb_artist_id = search_res['artists'][0]['id']
-        except Exception as e:
-            logger.error(f"MBID resolution failed for {artist_name}: {e}") # <--- self. removido
+            search_res = requests.get(
+                mb_search_url,
+                headers=mb_headers,
+                timeout=5
+            ).json()
+        except Exception as exc:
+            self._log_timed("error", start_ts, f"MB artist search failed for '{artist_name}': {exc}")
             return ""
 
-        # Step 1: Advanced Lucene Query on MusicBrainz to guarantee ISRC presence
-        query = urllib.parse.quote(f'arid:{mb_artist_id} AND isrc:*')
-        mb_url = f"https://musicbrainz.org/ws/2/recording?query={query}&limit=10&fmt=json"
-        
-        try:
-            mb_res = requests.get(mb_url, headers=mb_headers, timeout=10).json()
-        except Exception as e:
-            logger.error(f"MB ISRC fetch failed during triangulation: {e}") # <--- self. removido
+        mb_artists = search_res.get("artists", [])
+        if not mb_artists:
+            self._log_timed("warning", start_ts, f"No MB artist candidates found for '{artist_name}'")
             return ""
 
+        scored_mb_candidates = []
+        for mb_artist in mb_artists:
+            mb_name = mb_artist.get("name", "")
+            mb_id = mb_artist.get("id", "")
+            name_score = self._artist_name_match_score(artist_name, mb_name)
+
+            scored_mb_candidates.append(
+                {
+                    "mbid": mb_id,
+                    "name": mb_name,
+                    "score": name_score,
+                    "sort_name": mb_artist.get("sort-name", ""),
+                    "disambiguation": mb_artist.get("disambiguation", ""),
+                }
+            )
+
+        scored_mb_candidates.sort(key=lambda item: item["score"], reverse=True)
+
+        self._log_timed(
+            "info",
+            start_ts,
+            "MB artist candidates: "
+            + str(
+                [
+                    {
+                        "name": item["name"],
+                        "mbid": item["mbid"],
+                        "score": item["score"],
+                    }
+                    for item in scored_mb_candidates[:3]
+                ]
+            ),
+        )
+
+        # Require at least a reasonable match before proceeding
+        top_mb_candidate = scored_mb_candidates[0]
+        if top_mb_candidate["score"] < 80:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Triangulation aborted: low-confidence MB artist match for '{artist_name}'. "
+                f"Best candidate was '{top_mb_candidate['name']}' with score={top_mb_candidate['score']}"
+            )
+            return ""
+
+        # ---------------------------------------------------------
+        # Step 1: Fetch scout ISRCs from the best MB candidates
+        # ---------------------------------------------------------
         scout_isrcs = []
-        for rec in mb_res.get("recordings", []):
-            for isrc_obj in rec.get("isrcs", []):
-                if isinstance(isrc_obj, dict):
-                    code = isrc_obj.get("isrc") or isrc_obj.get("id")
-                else:
-                    code = str(isrc_obj)
-                    
-                if code and code not in scout_isrcs:
-                    scout_isrcs.append(code)
-                if len(scout_isrcs) >= 3:
+        used_mbids = []
+
+        for mb_candidate in scored_mb_candidates[:2]:
+            if mb_candidate["score"] < 80:
+                continue
+
+            mb_artist_id = mb_candidate["mbid"]
+            used_mbids.append(mb_artist_id)
+
+            query = urllib.parse.quote(f'arid:{mb_artist_id} AND isrc:*')
+            mb_url = (
+                f"https://musicbrainz.org/ws/2/recording?query={query}&limit=15&fmt=json"
+            )
+
+            try:
+                mb_res = requests.get(
+                    mb_url,
+                    headers=mb_headers,
+                    timeout=10
+                ).json()
+            except Exception as exc:
+                self._log_timed(
+                    "warning",
+                    start_ts,
+                    f"MB ISRC fetch failed for MBID {mb_artist_id}: {exc}"
+                )
+                continue
+
+            for rec in mb_res.get("recordings", []):
+                for isrc_obj in rec.get("isrcs", []):
+                    if isinstance(isrc_obj, dict):
+                        code = isrc_obj.get("isrc") or isrc_obj.get("id")
+                    else:
+                        code = str(isrc_obj)
+
+                    if code and code not in scout_isrcs:
+                        scout_isrcs.append(code)
+
+                    if len(scout_isrcs) >= 5:
+                        break
+
+                if len(scout_isrcs) >= 5:
                     break
-            if len(scout_isrcs) >= 3:
+
+            if len(scout_isrcs) >= 5:
                 break
-                
+
+        self._log_timed(
+            "info",
+            start_ts,
+            f"Scout ISRCs gathered from MB candidates {used_mbids}: {scout_isrcs}"
+        )
+
         if not scout_isrcs:
-            logger.warning(f"Triangulation aborted: No ISRCs found for MBID {mb_artist_id}") # <--- self. removido
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Triangulation aborted: no scout ISRCs found for '{artist_name}'"
+            )
             return ""
 
-        # Step 2: The Golden Batch Request to ReccoBeats
+        # ---------------------------------------------------------
+        # Step 2: Batch query RB and score artist matches explicitly
+        # ---------------------------------------------------------
         isrc_string = ",".join(scout_isrcs)
+
         try:
             params = {"ids": isrc_string}
-            rb_res = self._request_json(f"{self.rb_url}/track", self.rb_headers, params)
-            
-            items = rb_res.get("content") or rb_res.get("items") or (rb_res if isinstance(rb_res, list) else [])
-            if isinstance(items, dict) and "id" in items: 
-                items = [items]
-                
-            if items:
-                track_data = items[0]
-                extracted_id = track_data.get("artistId")
-                
-                if not extracted_id and track_data.get("artists"):
-                    extracted_id = track_data["artists"][0].get("id", "")
-                    
-                if extracted_id:
-                    logger.info(f"Successfully triangulated RB Artist ID via batch ISRCs: {extracted_id}") # <--- self. removido
-                    return extracted_id
-                    
-        except Exception as e:
-            logger.error(f"RB Batch Triangulation failed: {e}") # <--- self. removido
-            
-        return ""
+            rb_res = self._request_json(
+                f"{self.rb_url}/track",
+                self.rb_headers,
+                params
+            )
+        except Exception as exc:
+            self._log_timed("error", start_ts, f"RB batch triangulation request failed: {exc}")
+            return ""
+
+        items = rb_res.get("content") or rb_res.get("items") or (
+            rb_res if isinstance(rb_res, list) else []
+        )
+        if isinstance(items, dict) and "id" in items:
+            items = [items]
+
+        if not items:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Triangulation aborted: RB batch returned no items for ISRCs {scout_isrcs}"
+            )
+            return ""
+
+        rb_candidates = []
+
+        for track in items:
+            track_title = track.get("trackTitle", track.get("name", "Unknown Track"))
+            track_popularity = int(track.get("popularity", 0) or 0)
+            track_isrc = track.get("isrc", "")
+
+            artists = track.get("artists", []) or []
+            if not artists:
+                continue
+
+            best_artist = None
+            for idx, artist in enumerate(artists):
+                candidate_name = artist.get("name", "")
+                candidate_id = artist.get("id", "")
+                name_score = self._artist_name_match_score(artist_name, candidate_name)
+                is_primary = idx == 0
+
+                candidate = {
+                    "matched_artist_id": candidate_id,
+                    "matched_artist_name": candidate_name,
+                    "name_score": name_score,
+                    "is_primary": is_primary,
+                    "artist_count": len(artists),
+                    "track_title": track_title,
+                    "track_isrc": track_isrc,
+                    "track_popularity": track_popularity,
+                }
+
+                if best_artist is None:
+                    best_artist = candidate
+                else:
+                    current_key = (
+                        best_artist["name_score"],
+                        1 if best_artist["is_primary"] else 0,
+                        1 if best_artist["artist_count"] == 1 else 0,
+                        best_artist["track_popularity"],
+                    )
+                    new_key = (
+                        candidate["name_score"],
+                        1 if candidate["is_primary"] else 0,
+                        1 if candidate["artist_count"] == 1 else 0,
+                        candidate["track_popularity"],
+                    )
+                    if new_key > current_key:
+                        best_artist = candidate
+
+            if best_artist:
+                rb_candidates.append(best_artist)
+
+        self._log_timed(
+            "info",
+            start_ts,
+            "RB batch artist candidates: "
+            + str(rb_candidates[:5])
+        )
+
+        if not rb_candidates:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Triangulation aborted: RB batch produced no artist candidates for '{artist_name}'"
+            )
+            return ""
+
+        rb_candidates.sort(
+            key=lambda item: (
+                item["name_score"],
+                1 if item["is_primary"] else 0,
+                1 if item["artist_count"] == 1 else 0,
+                item["track_popularity"],
+            ),
+            reverse=True,
+        )
+
+        best_rb_candidate = rb_candidates[0]
+
+        # Require a strong nominal match before accepting a catalog-level fallback
+        if best_rb_candidate["name_score"] < 80:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Triangulation aborted: low-confidence RB artist match for '{artist_name}'. "
+                f"Best RB candidate was '{best_rb_candidate['matched_artist_name']}' "
+                f"(score={best_rb_candidate['name_score']}, primary={best_rb_candidate['is_primary']}, "
+                f"artists_in_track={best_rb_candidate['artist_count']}, "
+                f"track='{best_rb_candidate['track_title']}')"
+            )
+            return ""
+
+        self._log_timed(
+            "info",
+            start_ts,
+            f"Successfully triangulated RB Artist ID via validated batch match: "
+            f"{best_rb_candidate['matched_artist_id']} "
+            f"({best_rb_candidate['matched_artist_name']})"
+        )
+        return best_rb_candidate["matched_artist_id"]
     
     def _resolve_inference_by_rb_track_id(
         self,
