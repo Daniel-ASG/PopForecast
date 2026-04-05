@@ -220,19 +220,37 @@ class PopForecastInferenceBackend:
 
             triangulated_artist_id = self._triangulate_rb_artist_id_batch(artist_name)
 
-            if triangulated_artist_id:
+        if triangulated_artist_id:
+            logging.info(
+                f"✅ Batch triangulation recovered RB Artist ID: {triangulated_artist_id}"
+            )
+
+            catalog_rescue = self._rescue_track_from_rb_artist_catalog(
+                artist_id=triangulated_artist_id,
+                track_title=track_title,
+                artist_name=artist_name,
+            )
+
+            if catalog_rescue.get("success"):
                 logging.info(
-                    f"✅ Batch triangulation recovered RB Artist ID: {triangulated_artist_id}"
+                    f"✅ Catalog track rescue succeeded for '{artist_name} - {track_title}'."
                 )
-                return {
-                    "success": True,
-                    "is_artist_only_fallback": True,
-                    "message": f"Track not found. Routing to {artist_name}'s catalog via batch triangulation.",
-                    "artist_fallback_data": {
-                        "id": triangulated_artist_id,
-                        "name": artist_name
-                    }
+                return catalog_rescue
+
+            logging.warning(
+                f"⚠️ Catalog track rescue failed for '{artist_name} - {track_title}'. "
+                "Routing to artist discography."
+            )
+
+            return {
+                "success": True,
+                "is_artist_only_fallback": True,
+                "message": f"Track not found. Routing to {artist_name}'s catalog via batch triangulation.",
+                "artist_fallback_data": {
+                    "id": triangulated_artist_id,
+                    "name": artist_name
                 }
+            }
             
             # ---------------------------------------------------------
             # PLAN C: Graceful Degradation (Artist-Only Match with Deep Pulse Check)
@@ -886,6 +904,216 @@ class PopForecastInferenceBackend:
         )
         return best_rb_candidate["matched_artist_id"]
     
+    def _rescue_track_from_rb_artist_catalog(
+        self,
+        artist_id: str,
+        track_title: str,
+        artist_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Attempts to rescue a target track by scanning the recovered RB artist catalog.
+
+        Strategy:
+        1) load the artist catalog
+        2) search all album tracklists for the requested track title
+        3) rank plausible matches conservatively
+        4) resolve the best candidate through the canonical by-id path
+        """
+        start_ts = time.perf_counter()
+
+        if not artist_id or not track_title:
+            self._log_timed(
+                "warning",
+                start_ts,
+                "Catalog track rescue aborted: missing artist_id or track_title."
+            )
+            return {"success": False, "error": "missing_artist_or_track"}
+
+        target_meta = self._normalize_track_variant_title(track_title)
+        target_base_title = target_meta["base_title"]
+
+        if not target_base_title:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Catalog track rescue aborted: invalid target title '{track_title}'."
+            )
+            return {"success": False, "error": "invalid_target_title"}
+
+        catalog = self.get_rb_artist_catalog(artist_id)
+        if not catalog:
+            self._log_timed(
+                "warning",
+                start_ts,
+                f"Catalog track rescue aborted: empty catalog for RB artist {artist_id}."
+            )
+            return {"success": False, "error": "empty_catalog"}
+
+        match_rank = {
+            "exact": 0,
+            "featured_variant": 1,
+            "base_variant": 2,
+        }
+        track_type_rank = {
+            "studio": 0,
+            "acoustic": 1,
+            "live": 2,
+            "demo": 3,
+            "remix": 4,
+            "instrumental": 5,
+            "other": 6,
+        }
+
+        candidate_matches: List[Dict[str, Any]] = []
+
+        for album in catalog:
+            album_id = album.get("id")
+            if not album_id:
+                continue
+
+            album_title = album.get("title", "Unknown Album")
+            album_type = album.get("type", "Unknown")
+            album_popularity = int(album.get("popularity", 0) or 0)
+
+            canonical_meta = self._score_catalog_album_canonicality(
+                album_title=album_title,
+                album_type=album_type,
+            )
+
+            album_tracks = self.get_rb_album_tracks(album_id)
+            if not album_tracks:
+                continue
+
+            for candidate_track in album_tracks:
+                candidate_title = candidate_track.get("title", "")
+                candidate_meta = self._normalize_track_variant_title(candidate_title)
+
+                if candidate_meta["base_title"] != target_base_title:
+                    continue
+
+                contextual_track_meta = self._infer_contextual_track_type(
+                    track_title=candidate_title,
+                    album_title=album_title,
+                    album_type=album_type,
+                )
+                track_type = contextual_track_meta["track_type"]
+                if track_type not in track_type_rank:
+                    track_type = "other"
+
+                if candidate_meta["normalized_title"] == target_meta["normalized_title"]:
+                    match_quality = "exact"
+                elif candidate_meta["is_featured"] != target_meta["is_featured"]:
+                    match_quality = "featured_variant"
+                else:
+                    match_quality = "base_variant"
+
+                # Same micro-surgery used in the harvester:
+                # an "exact" title inside a contextual live/remix/demo album should
+                # not outrank explicit track-title variants.
+                if (
+                    match_quality == "exact"
+                    and track_type != "studio"
+                    and contextual_track_meta["source"] == "album_context"
+                ):
+                    match_quality = "base_variant"
+
+                track_id = candidate_track.get("id")
+                if not track_id:
+                    continue
+
+                year_value = album.get("year", "0000")
+                year_int = int(year_value) if str(year_value).isdigit() else 0
+                track_popularity = int(candidate_track.get("popularity", 0) or 0)
+
+                candidate_matches.append(
+                    {
+                        "track_id": track_id,
+                        "title": candidate_title,
+                        "album": album_title,
+                        "album_type": album_type,
+                        "year": year_int,
+                        "track_type": track_type,
+                        "track_type_source": contextual_track_meta["source"],
+                        "match_quality": match_quality,
+                        "canonicality_score": canonical_meta["canonicality_score"],
+                        "canonicality_tags": canonical_meta["canonicality_tags"],
+                        "track_popularity": track_popularity,
+                        "album_popularity": album_popularity,
+                    }
+                )
+
+        self._log_timed(
+            "info",
+            start_ts,
+            f"Catalog track rescue candidates found for '{track_title}': {len(candidate_matches)}"
+        )
+
+        if not candidate_matches:
+            return {"success": False, "error": "track_not_found_in_catalog"}
+
+        candidate_matches.sort(
+            key=lambda item: (
+                match_rank.get(item["match_quality"], 99),
+                track_type_rank.get(item["track_type"], 99),
+                -int(item["canonicality_score"]),
+                -int(item["track_popularity"]),
+                -int(item["album_popularity"]),
+                int(item["year"]) if int(item["year"]) > 0 else 9999,
+            )
+        )
+
+        self._log_timed(
+            "info",
+            start_ts,
+            "Catalog track rescue top candidates: "
+            + str(
+                [
+                    {
+                        "title": item["title"],
+                        "album": item["album"],
+                        "match_quality": item["match_quality"],
+                        "track_type": item["track_type"],
+                        "canonicality_score": item["canonicality_score"],
+                        "track_popularity": item["track_popularity"],
+                    }
+                    for item in candidate_matches[:5]
+                ]
+            )
+        )
+
+        # Try the best few candidates through the canonical by-id inference path.
+        for candidate in candidate_matches[:3]:
+            self._log_timed(
+                "info",
+                start_ts,
+                f"Attempting by-id rescue with track_id={candidate['track_id']} "
+                f"title='{candidate['title']}' album='{candidate['album']}'"
+            )
+
+            rescue_result = self.get_inference_data_by_id(
+                track_id=candidate["track_id"],
+                context_artist_id=artist_id,
+            )
+
+            if rescue_result.get("success"):
+                rescue_result["inference_payload"]["rescue_source"] = "artist_catalog_scan"
+                rescue_result["inference_payload"]["rescue_match_quality"] = candidate["match_quality"]
+                rescue_result["inference_payload"]["rescue_track_type"] = candidate["track_type"]
+
+                self._log_timed(
+                    "info",
+                    start_ts,
+                    f"Catalog track rescue succeeded with track_id={candidate['track_id']}"
+                )
+                return rescue_result
+
+        self._log_timed(
+            "warning",
+            start_ts,
+            f"Catalog track rescue failed after trying top candidates for '{track_title}'."
+        )
+        return {"success": False, "error": "candidate_resolution_failed"}
+
     def _resolve_inference_by_rb_track_id(
         self,
         track_id: str,
