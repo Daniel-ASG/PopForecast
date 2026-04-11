@@ -209,10 +209,14 @@ def perform_search(artist, track, album=None):
     with st.spinner(msg):
         res = cached_get_inference_data(artist, track, album_name=album)
         
+        # Verifica se a faixa foi resolvida (o backend pode ter feito o rescue internamente)
+        has_resolved_track = bool(res.get("inference_payload", {}).get("rb_track_id"))
+
         # ==========================================
         # 1. GRACEFUL DEGRADATION (ARTIST FALLBACK)
         # ==========================================
-        if res.get("success") and res.get("is_artist_only_fallback"):
+        # Só aciona o fallback automático se a faixa NÃO foi resolvida
+        if res.get("success") and res.get("is_artist_only_fallback") and not has_resolved_track:
             st.session_state.live_payload = None 
             st.session_state.search_error = None
             st.session_state.search_warning = res.get("message", f"Track not found. Routing to {res['artist_fallback_data']['name']}'s catalog.")
@@ -223,18 +227,21 @@ def perform_search(artist, track, album=None):
             st.session_state['catalog_albums'] = None
             st.session_state['current_album_tracks'] = None
             st.session_state['auto_load_catalog'] = True
+            
+            # LOG exigido pelo backend
+            print(f"[Catalog UI] reason=text_search_fallback artist_id={res['artist_fallback_data']['id']}")
             return # Sai da função para não dar erro
         
         # ==========================================
         # 2. SUCCESS: UPGRADING THE PAYLOAD
         # ==========================================
-        elif res.get("success"):
+        elif res.get("success") and has_resolved_track:
             track_id = res["inference_payload"].get("rb_track_id")
             
             if track_id:
                 rich_res = cached_get_inference_data_by_id(track_id)
                 if rich_res.get("success"):
-                    res = rich_res 
+                    res = rich_res
             
             st.session_state.live_payload = res["inference_payload"]
             
