@@ -155,102 +155,142 @@ class PopForecastInferenceBackend:
         # ---------------------------------------------------------
         # PLAN B & C: YTMusic Bridge & Graceful Degradation
         # ---------------------------------------------------------
+        triangulated_artist_id = ""
+
         if not raw_valid_tracks:
-            logging.warning(f"ISRC Gap detected for '{track_title}'. Triggering YTMusic Fallback...")
-            
+            logging.warning(
+                f"ISRC Gap detected for '{track_title}'. Triggering YTMusic Fallback..."
+            )
+
             try:
                 from ytmusicapi import YTMusic
+
                 yt = YTMusic()
                 yt_results = yt.search(f"{artist_name} {track_title}", filter="songs")
-                
+
                 if yt_results:
                     # Strip quotes to prevent API search failures
-                    yt_album = yt_results[0].get("album", {}).get("name", "").replace('"', '').strip()
-                    
+                    yt_album = (
+                        yt_results[0]
+                        .get("album", {})
+                        .get("name", "")
+                        .replace('"', "")
+                        .strip()
+                    )
+
                     if yt_album:
                         # NEW APPROACH: Use Album Search with a wider net (size: 20)
                         search_query = f"{artist_name} {yt_album}"
-                        logging.info(f"YTMusic tip: '{yt_album}'. Performing Deep Album Search in RB for: '{search_query}'...")
-                        
+                        logging.info(
+                            f"YTMusic tip: '{yt_album}'. Performing Deep Album Search in RB for: '{search_query}'..."
+                        )
+
                         # Request 20 albums to bypass live versions and remasters crowding the top 5
-                        album_search_res = self._request_json(f"{self.rb_url}/album/search", self.rb_headers, {"searchText": search_query, "size": 20})
-                        rb_albums = album_search_res.get("content", []) if isinstance(album_search_res, dict) else []
-                        
+                        album_search_res = self._request_json(
+                            f"{self.rb_url}/album/search",
+                            self.rb_headers,
+                            {"searchText": search_query, "size": 20},
+                        )
+                        rb_albums = (
+                            album_search_res.get("content", [])
+                            if isinstance(album_search_res, dict)
+                            else []
+                        )
+
                         # RADAR: Log the top suspects returned by ReccoBeats to diagnose API sorting
                         found_album_names = [a.get("name", "Unknown") for a in rb_albums[:5]]
                         logging.info(f"Top 5 albums returned by RB Search: {found_album_names}")
-                        
+
                         target_track_id = None
-                        
+
                         # Iterate through the matched albums
                         for alb in rb_albums:
                             alb_name = alb.get("name", "")
                             alb_id = alb.get("id")
-                            
+
                             # Optimization: Skip fetching tracks if the album name is completely unrelated
-                            if yt_album.lower() not in alb_name.lower() and alb_name.lower() not in yt_album.lower():
+                            if (
+                                yt_album.lower() not in alb_name.lower()
+                                and alb_name.lower() not in yt_album.lower()
+                            ):
                                 continue
 
-                            tracks_res = self._request_json(f"{self.rb_url}/album/{alb_id}/track", self.rb_headers, {"size": 50})
-                            rb_tracks = tracks_res.get("content", []) if isinstance(tracks_res, dict) else []
-                            
+                            tracks_res = self._request_json(
+                                f"{self.rb_url}/album/{alb_id}/track",
+                                self.rb_headers,
+                                {"size": 50},
+                            )
+                            rb_tracks = (
+                                tracks_res.get("content", [])
+                                if isinstance(tracks_res, dict)
+                                else []
+                            )
+
                             for t in rb_tracks:
                                 rb_t_norm = self._normalize(t.get("trackTitle", ""))
+
                                 # Lenient match for the track title
                                 if t_norm in rb_t_norm or rb_t_norm in t_norm:
                                     target_track_id = t.get("id")
-                                    logging.info(f"🎯 Target track '{t.get('trackTitle')}' found inside album: '{alb_name}'!")
+                                    logging.info(
+                                        f"🎯 Target track '{t.get('trackTitle')}' found inside album: '{alb_name}'!"
+                                    )
                                     break
-                            
+
                             if target_track_id:
                                 break
-                                
+
                         if target_track_id:
-                            logging.info(f"✅ YTMusic Fallback Success! Track ID found: {target_track_id}")
+                            logging.info(
+                                f"✅ YTMusic Fallback Success! Track ID found: {target_track_id}"
+                            )
                             delegated_payload = self.get_inference_data_by_id(
-                                track_id=target_track_id, 
-                                context_artist_id=context_artist_id
+                                track_id=target_track_id
                             )
                             if delegated_payload.get("success"):
-                                delegated_payload["inference_payload"]["execution_time"] = round(time.time() - start_ts, 2)
+                                delegated_payload["inference_payload"]["execution_time"] = round(
+                                    time.time() - start_ts, 2
+                                )
                             return delegated_payload
-                            
+
             except Exception as e:
                 logging.error(f"❌ YTMusic Fallback encountered an error: {e}")
 
             triangulated_artist_id = self._triangulate_rb_artist_id_batch(artist_name)
 
-        if triangulated_artist_id:
-            logging.info(
-                f"✅ Batch triangulation recovered RB Artist ID: {triangulated_artist_id}"
-            )
-
-            catalog_rescue = self._rescue_track_from_rb_artist_catalog(
-                artist_id=triangulated_artist_id,
-                track_title=track_title,
-                artist_name=artist_name,
-            )
-
-            if catalog_rescue.get("success"):
+            if triangulated_artist_id:
                 logging.info(
-                    f"✅ Catalog track rescue succeeded for '{artist_name} - {track_title}'."
+                    f"✅ Batch triangulation recovered RB Artist ID: {triangulated_artist_id}"
                 )
-                return catalog_rescue
 
-            logging.warning(
-                f"⚠️ Catalog track rescue failed for '{artist_name} - {track_title}'. "
-                "Routing to artist discography."
-            )
+                catalog_rescue = self._rescue_track_from_rb_artist_catalog(
+                    artist_id=triangulated_artist_id,
+                    track_title=track_title,
+                    artist_name=artist_name,
+                )
 
-            return {
-                "success": True,
-                "is_artist_only_fallback": True,
-                "message": f"Track not found. Routing to {artist_name}'s catalog via batch triangulation.",
-                "artist_fallback_data": {
-                    "id": triangulated_artist_id,
-                    "name": artist_name
+                if catalog_rescue.get("success"):
+                    logging.info(
+                        f"✅ Catalog track rescue succeeded for '{artist_name} - {track_title}'."
+                    )
+                    return catalog_rescue
+
+                logging.warning(
+                    f"⚠️ Catalog track rescue failed for '{artist_name} - {track_title}'. "
+                    "Routing to artist discography."
+                )
+
+                return {
+                    "success": True,
+                    "is_artist_only_fallback": True,
+                    "message": (
+                        f"Track not found. Routing to {artist_name}'s catalog via batch triangulation."
+                    ),
+                    "artist_fallback_data": {
+                        "id": triangulated_artist_id,
+                        "name": artist_name,
+                    },
                 }
-            }
             
             # ---------------------------------------------------------
             # PLAN C: Graceful Degradation (Artist-Only Match with Deep Pulse Check)
