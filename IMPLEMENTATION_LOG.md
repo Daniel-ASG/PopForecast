@@ -844,3 +844,25 @@ To solve the data contamination issue and elevate the application to an enterpri
 - **State Security:** Verified that `.streamlit/secrets.toml` and `.env` remain strictly excluded to prevent credential leakage.
 
 **STATUS:** ENVIRONMENT STABILIZED. The project is now immune to cloud-sync interference and ready for high-performance local development and cloud deployment.
+
+## 📅 CYCLE 08 — ENTITY TRIANGULATION, TRACK RESCUE & UI STABILIZATION
+
+### 1. Advanced Entity Resolution (The "Regional Booster")
+To handle severe metadata mismatches (particularly for regional artists lacking precise ISRCs in MusicBrainz), the inference backend was significantly upgraded to support multi-stage triangulation.
+* **Batch Triangulation & Validation:** Implemented batch validation for ReccoBeats (RB) artist candidates using normalized names rather than trusting the first batch item, successfully resolving homonym collisions (e.g., mapping *João Gomes* correctly instead of *Vanessa Da Mata*).
+* **YTMusic Fallback Refactoring:** Enhanced the YTMusic bridge with deep album search (`size=20`), lenient title matching, and pulse-checked artist fallback to improve match accuracy when primary sources fail.
+* **Track Rescue Operations:** Added a recovery mechanism that scans validated RB artist catalogs for the requested track *before* triggering the artist-only fallback, significantly improving low-evidence recovery for artists like *Gilberto Gil*.
+
+### 2. Curator Menu & Variant Harvesting
+The application was evolved to give the user ultimate control over which track version is analyzed, shifting from a rigid "canonical-only" extraction to an interactive curation model.
+* **Catalog-Based Variant Harvesting:** The `build_curator_menu` was upgraded to harvest variants directly from the catalog. It classifies variants using track title and album context to improve the selection of canonical representatives for menu entries.
+* **Curator Context Forwarding:** Updated the UI to pass curator context from the `active_payload` directly to the backend, enabling a controlled adoption of the new harvester path while preserving the legacy `raw_alternatives` menu as an automatic fallback.
+
+### 3. Frontend Stabilization & State Bleed Resolution
+Integrating the complex MoE backend with Streamlit's reactive rendering required strict state management solutions to prevent UI instability.
+* **Catalog State Bleed Fix:** Solved the "State Tug-of-War" (where widgets and sliders preserved outdated memory states) by implementing a hard reset mechanism for the catalog state, including a cache breaker button.
+* **Tabbed Search Interface:** Refactored the main search and catalog explorer into a cleanly tabbed interface, minimizing visual pollution and bounding the search components efficiently.
+* **Preventing Unnecessary Fallbacks:** Fixed a UI bug where the Artist Catalog Explorer drawer would automatically expand even after the backend had successfully "rescued" the track. The UI now actively detects resolved tracks via `rb_track_id` to keep the user on the success path and avoid unnecessary catalog routing.
+
+### 4. Telemetry & Observability
+* **Dirt Sampling & Telemetry:** Added targeted logging checkpoints to `get_rb_artist_catalog` to track pagination and data volume. Implemented a 'dirt sampling' warning to log the 5 least popular items, aiding in the debugging of dirty metadata and catalog distributions.
