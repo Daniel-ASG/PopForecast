@@ -153,188 +153,90 @@ class PopForecastInferenceBackend:
             logging.warning(f"⚠️ [MB Search] Nenhum ISRC encontrado para '{track_title}' no MusicBrainz.")
 
         # ---------------------------------------------------------
-        # PLAN B & C: YTMusic Bridge & Graceful Degradation
+        # PLAN B & C: MB-Triangulated Catalog Scan + YTMusic Context
         # ---------------------------------------------------------
-        triangulated_artist_id = ""
-
         if not raw_valid_tracks:
-            logging.warning(
-                f"ISRC Gap detected for '{track_title}'. Triggering YTMusic Fallback..."
-            )
-
+            logging.warning(f"ISRC Gap detected for '{track_title}'. Triggering MB-Triangulated Catalog Scan...")
+            
+            import time
+            yt_album = ""
+            
+            # 1. YTMusic Context (The Extra Layer of Security)
             try:
+                yt_start = time.time()
                 from ytmusicapi import YTMusic
-
                 yt = YTMusic()
                 yt_results = yt.search(f"{artist_name} {track_title}", filter="songs")
-
-                if yt_results:
-                    # Strip quotes to prevent API search failures
-                    yt_album = (
-                        yt_results[0]
-                        .get("album", {})
-                        .get("name", "")
-                        .replace('"', "")
-                        .strip()
-                    )
-
-                    if yt_album:
-                        # NEW APPROACH: Use Album Search with a wider net (size: 20)
-                        search_query = f"{artist_name} {yt_album}"
-                        logging.info(
-                            f"YTMusic tip: '{yt_album}'. Performing Deep Album Search in RB for: '{search_query}'..."
-                        )
-
-                        # Request 20 albums to bypass live versions and remasters crowding the top 5
-                        album_search_res = self._request_json(
-                            f"{self.rb_url}/album/search",
-                            self.rb_headers,
-                            {"searchText": search_query, "size": 20},
-                        )
-                        rb_albums = (
-                            album_search_res.get("content", [])
-                            if isinstance(album_search_res, dict)
-                            else []
-                        )
-
-                        # RADAR: Log the top suspects returned by ReccoBeats to diagnose API sorting
-                        found_album_names = [a.get("name", "Unknown") for a in rb_albums[:5]]
-                        logging.info(f"Top 5 albums returned by RB Search: {found_album_names}")
-
-                        target_track_id = None
-
-                        # Iterate through the matched albums
-                        for alb in rb_albums:
-                            alb_name = alb.get("name", "")
-                            alb_id = alb.get("id")
-
-                            # Optimization: Skip fetching tracks if the album name is completely unrelated
-                            if (
-                                yt_album.lower() not in alb_name.lower()
-                                and alb_name.lower() not in yt_album.lower()
-                            ):
-                                continue
-
-                            tracks_res = self._request_json(
-                                f"{self.rb_url}/album/{alb_id}/track",
-                                self.rb_headers,
-                                {"size": 50},
-                            )
-                            rb_tracks = (
-                                tracks_res.get("content", [])
-                                if isinstance(tracks_res, dict)
-                                else []
-                            )
-
-                            for t in rb_tracks:
-                                rb_t_norm = self._normalize(t.get("trackTitle", ""))
-
-                                # Lenient match for the track title
-                                if t_norm in rb_t_norm or rb_t_norm in t_norm:
-                                    target_track_id = t.get("id")
-                                    logging.info(
-                                        f"🎯 Target track '{t.get('trackTitle')}' found inside album: '{alb_name}'!"
-                                    )
-                                    break
-
-                            if target_track_id:
-                                break
-
-                        if target_track_id:
-                            logging.info(
-                                f"✅ YTMusic Fallback Success! Track ID found: {target_track_id}"
-                            )
-                            delegated_payload = self.get_inference_data_by_id(
-                                track_id=target_track_id
-                            )
-                            if delegated_payload.get("success"):
-                                delegated_payload["inference_payload"]["execution_time"] = round(
-                                    time.time() - start_ts, 2
-                                )
-                            return delegated_payload
-
-            except Exception as e:
-                logging.error(f"❌ YTMusic Fallback encountered an error: {e}")
-
-            triangulated_artist_id = self._triangulate_rb_artist_id_batch(artist_name)
-
-            if triangulated_artist_id:
-                logging.info(
-                    f"✅ Batch triangulation recovered RB Artist ID: {triangulated_artist_id}"
-                )
-
-                catalog_rescue = self._rescue_track_from_rb_artist_catalog(
-                    artist_id=triangulated_artist_id,
-                    track_title=track_title,
-                    artist_name=artist_name,
-                )
-
-                if catalog_rescue.get("success"):
-                    logging.info(
-                        f"✅ Catalog track rescue succeeded for '{artist_name} - {track_title}'."
-                    )
-                    return catalog_rescue
-
-                logging.warning(
-                    f"⚠️ Catalog track rescue failed for '{artist_name} - {track_title}'. "
-                    "Routing to artist discography."
-                )
-
-                return {
-                    "success": True,
-                    "is_artist_only_fallback": True,
-                    "message": (
-                        f"Track not found. Routing to {artist_name}'s catalog via batch triangulation."
-                    ),
-                    "artist_fallback_data": {
-                        "id": triangulated_artist_id,
-                        "name": artist_name,
-                    },
-                }
-            
-            # ---------------------------------------------------------
-            # PLAN C: Graceful Degradation (Artist-Only Match with Deep Pulse Check)
-            # ---------------------------------------------------------
-            logging.warning("YTMusic Fallback exhausted or failed. Routing to Artist Discography.")
-            
-            artist_res = self._request_json(f"{self.rb_url}/artist/search", self.rb_headers, {"searchText": artist_name, "size": 10})
-            artists = artist_res.get("content", []) if isinstance(artist_res, dict) else []
-            
-            if artists:
-                valid_artists = []
                 
-                for a in artists:
-                    # Lenient artist name matching
-                    if any(part in a.get("name", "").lower() for part in artist_name.lower().split()):
-                        test_id = a.get("id")
-                        
-                        # THE PULSE CHECK: Fetch a sample of albums to measure true market relevance
-                        album_check = self._request_json(f"{self.rb_url}/artist/{test_id}/album", self.rb_headers, {"size": 3})
-                        
-                        if isinstance(album_check, dict) and album_check.get("content"):
-                            albums = album_check["content"]
-                            # Rank homonyms by the popularity of their top album (dodging DJs/Covers)
-                            max_pop = max([int(alb.get("popularity", 0)) for alb in albums])
-                            valid_artists.append({"artist": a, "max_pop": max_pop})
-                            
-                if valid_artists:
-                    valid_artists.sort(key=lambda x: x["max_pop"], reverse=True)
-                    valid_artist = valid_artists[0]["artist"]
-                    logging.info(f"Pulse Check selected '{valid_artist.get('name')}' with max album pop {valid_artists[0]['max_pop']}.")
-                else:
-                    valid_artist = artists[0]
+                if yt_results:
+                    yt_album = yt_results[0].get("album", {}).get("name", "").replace('"', '').strip()
+                    yt_elapsed = time.time() - yt_start
+                    logging.info(f"⏱️ [Timing] YTMusic tip '{yt_album}' acquired in {yt_elapsed:.2f}s")
+            except Exception as e:
+                logging.error(f"❌ YTMusic context failed: {e}")
 
-                return {
-                    "success": True, 
-                    "is_artist_only_fallback": True, 
-                    "message": f"Track not found. Routing to {valid_artist.get('name')}'s catalog.",
-                    "artist_fallback_data": {
-                        "id": valid_artist.get("id"),
-                        "name": valid_artist.get("name")
+            # 2. Resolve Artist ID via MusicBrainz Triangulation (The Source of Truth)
+            rb_start = time.time()
+            logging.info(f"Initiating MB->RB Artist Triangulation for '{artist_name}'...")
+            artist_id = self._triangulate_rb_artist_id_batch(artist_name)
+            
+            if artist_id:
+                logging.info(f"⏱️ [Timing] True RB Artist ID triangulated via MB in {time.time() - rb_start:.2f}s")
+
+                # 3. Fetch Full Catalog & Filter by YT Context
+                catalog = self.get_rb_artist_catalog(artist_id)
+                target_track_id = None
+                
+                if catalog:
+                    albums_to_scan = catalog
+                    
+                    # If YT gave us an album, prioritize it!
+                    if yt_album:
+                        yt_norm = self._normalize(yt_album)
+                        # Find albums in the catalog that match the YT Context
+                        context_albums = [alb for alb in catalog if yt_norm in self._normalize(alb["title"]) or self._normalize(alb["title"]) in yt_norm]
+                        if context_albums:
+                            logging.info(f"🔍 Context Match: Found {len(context_albums)} album(s) matching YT tip '{yt_album}'.")
+                            # Put the matching albums at the top of the scan queue
+                            albums_to_scan = context_albums + [a for a in catalog if a not in context_albums]
+                    
+                    # 4. Scan Tracks inside the prioritized albums
+                    scan_start = time.time()
+                    for alb in albums_to_scan:
+                        tracks = self.get_rb_album_tracks(alb["id"])
+                        for t in tracks:
+                            rb_t_norm = self._normalize(t["title"])
+                            if t_norm in rb_t_norm or rb_t_norm in t_norm:
+                                target_track_id = t["id"]
+                                logging.info(f"🎯 Target track '{t['title']}' found inside album: '{alb['title']}'!")
+                                break
+                        if target_track_id:
+                            break
+                    logging.info(f"⏱️ [Timing] Catalog track scan completed in {time.time() - scan_start:.2f}s")
+
+                # 5. Execute Handoff or Graceful Degradation
+                if target_track_id:
+                    logging.info(f"✅ Catalog Fallback Success! Track ID found: {target_track_id}")
+                    delegated_payload = self.get_inference_data_by_id(
+                        track_id=target_track_id, 
+                        context_artist_id=context_artist_id
+                    )
+                    if delegated_payload.get("success"):
+                        delegated_payload["inference_payload"]["execution_time"] = round(time.time() - start_ts, 2)
+                    return delegated_payload
+                else:
+                    logging.warning("Track not found in triangulated catalog. Routing to Artist Discography.")
+                    return {
+                        "success": True, 
+                        "is_artist_only_fallback": True, 
+                        "message": f"Track not found. Routing to {artist_name}'s catalog.",
+                        "artist_fallback_data": {
+                            "id": artist_id,
+                            "name": artist_name
+                        }
                     }
-                }
             else:
-                return {"success": False, "error": f"Neither track nor artist '{artist_name}' could be found."}
+                return {"success": False, "error": f"Neither track nor artist '{artist_name}' could be resolved via MusicBrainz triangulation."}
 
         # ---------------------------------------------------------
         # PLAN A (CONTINUED): Winner Selection from MusicBrainz Data
