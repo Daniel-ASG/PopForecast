@@ -1,0 +1,71 @@
+====================================================================================================
+Nirvana - Smells Like Teen Spirit
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'Nirvana - Smells Like Teen Spirit'
+INFO: 📥 [MB Search] 140 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 120 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 5 ISRCs únicos extraídos dos top 15 candidatos.
+INFO: ✅ [RB Match] 18 faixas validadas no ReccoBeats a partir dos ISRCs.
+
+====================================================================================================
+João Gomes - Aquelas Coisas
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'João Gomes - Aquelas Coisas'
+INFO: 📥 [MB Search] 103 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 4 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 0 ISRCs únicos extraídos dos top 15 candidatos.
+WARNING: ⚠️ [MB Search] Nenhum ISRC encontrado para 'Aquelas Coisas' no MusicBrainz.
+WARNING: ISRC Gap detected for 'Aquelas Coisas'. Triggering MB-Triangulated Catalog Scan...
+INFO: ⏱️ [Timing] YTMusic tip 'Aquelas Coisas' acquired in 1.14s
+INFO: Initiating MB->RB Artist Triangulation for 'João Gomes'...
+INFO: [16:43:34 | +000.45s] MB artist candidates: [{'name': 'João Gomes', 'mbid': '8903824a-5e7e-4634-b772-ac6d9c6962bd', 'score': 100}, {'name': 'João Gomes', 'mbid': 'bb17aa41-b488-46c1-b15f-b038c6679f92', 'score': 100}, {'name': 'João Gomes', 'mbid': 'aeedb73c-0d1f-4eb3-ad78-4377dec2917f', 'score': 100}]
+INFO: [16:43:36 | +002.96s] Scout ISRCs gathered from MB candidates ['8903824a-5e7e-4634-b772-ac6d9c6962bd', 'bb17aa41-b488-46c1-b15f-b038c6679f92']: ['BKJW22400003', 'BXVS02200003', 'BRSME2200469', 'BC3RD2300009']
+INFO: [16:43:37 | +003.29s] RB batch artist candidates: [{'matched_artist_id': '4890ab73-7b18-4a3e-8f43-f9067c7d3175', 'matched_artist_name': 'João Gomes', 'name_score': 100, 'is_primary': False, 'artist_count': 2, 'track_title': 'Comentário a Respeito de John', 'track_isrc': 'BXVS02200003', 'track_popularity': 22}, {'matched_artist_id': '4890ab73-7b18-4a3e-8f43-f9067c7d3175', 'matched_artist_name': 'João Gomes', 'name_score': 100, 'is_primary': False, 'artist_count': 2, 'track_title': 'Não Sou De Falar De Amor', 'track_isrc': 'BC3RD2300009', 'track_popularity': 49}, {'matched_artist_id': '4890ab73-7b18-4a3e-8f43-f9067c7d3175', 'matched_artist_name': 'João Gomes', 'name_score': 100, 'is_primary': False, 'artist_count': 2, 'track_title': 'Não Sou De Falar De Amor', 'track_isrc': 'BC3RD2300009', 'track_popularity': 47}, {'matched_artist_id': '4890ab73-7b18-4a3e-8f43-f9067c7d3175', 'matched_artist_name': 'João Gomes', 'name_score': 100, 'is_primary': False, 'artist_count': 2, 'track_title': 'É Sobre Isso - Ao Vivo', 'track_isrc': 'BRSME2200469', 'track_popularity': 24}, {'matched_artist_id': '4890ab73-7b18-4a3e-8f43-f9067c7d3175', 'matched_artist_name': 'João Gomes', 'name_score': 100, 'is_primary': False, 'artist_count': 2, 'track_title': 'Comentário a Respeito de John', 'track_isrc': 'BXVS02200003', 'track_popularity': 50}]
+INFO: [16:43:37 | +003.29s] Successfully triangulated RB Artist ID via validated batch match: 4890ab73-7b18-4a3e-8f43-f9067c7d3175 (João Gomes)
+INFO: ⏱️ [Timing] True RB Artist ID triangulated via MB in 4.91s
+INFO: 📂 [Catalog Explorer] Iniciando extração de catálogo para Artist ID: 4890ab73-7b18-4a3e-8f43-f9067c7d3175
+INFO: 📥 [Catalog Explorer] Download concluído: 84 itens brutos encontrados em 4 página(s).
+INFO: 📊 [Catalog Explorer] Distribuição do catálogo: {'Album': 8, 'Single': 69, 'Compilation': 0, 'Unknown': 0}
+INFO: 🗃️ [Catalog Explorer] Catálogo final filtrado: 77 itens únicos.
+WARNING: 🧟 [Catalog Explorer] Alerta de Sujeira! Os 5 itens MENOS populares retornados: 'Ave Maria Sertaneja (Música da Série Original Amazon Prime Cangaço Novo)' (Pop: 0, Tipo: Single), 'Lembrei de Nós' (Pop: 0, Tipo: Single), 'A Gente é Muito Mais Criança Esperança' (Pop: 1, Tipo: Single), 'A Energia do São João (Petrobras Apresenta)' (Pop: 5, Tipo: Single), 'Meu Amor É Seu' (Pop: 6, Tipo: Single)
+INFO: 🔍 Context Match: Found 1 album(s) matching YT tip 'Aquelas Coisas'.
+INFO: 🎯 Target track 'Aquelas Coisas' found inside album: 'Aquelas Coisas'!
+INFO: ⏱️ [Timing] Catalog track scan completed in 0.32s
+INFO: ✅ Catalog Fallback Success! Track ID found: 2e209a62-725d-46f4-b70d-8e5c438a9776
+
+====================================================================================================
+Sia - Cheap Thrills
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'Sia - Cheap Thrills'
+INFO: 📥 [MB Search] 127 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 29 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 7 ISRCs únicos extraídos dos top 15 candidatos.
+INFO: ✅ [RB Match] 56 faixas validadas no ReccoBeats a partir dos ISRCs.
+
+====================================================================================================
+Prince - Purple Rain
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'Prince - Purple Rain'
+INFO: 📥 [MB Search] 134 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 115 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 1 ISRCs únicos extraídos dos top 15 candidatos.
+INFO: ✅ [RB Match] 1 faixas validadas no ReccoBeats a partir dos ISRCs.
+
+====================================================================================================
+ABBA - Chiquitita
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'ABBA - Chiquitita'
+INFO: 📥 [MB Search] 132 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 51 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 4 ISRCs únicos extraídos dos top 15 candidatos.
+INFO: ✅ [RB Match] 34 faixas validadas no ReccoBeats a partir dos ISRCs.
+
+====================================================================================================
+Slipknot - Duality
+====================================================================================================
+INFO: 🔍 [MB Search] Iniciando busca textual para: 'Slipknot - Duality'
+INFO: 📥 [MB Search] 117 gravações brutas retornadas do MusicBrainz.
+INFO: 🎯 [MB Search] 41 candidatos aprovados na heurística textual.
+INFO: 🏷️ [MB Search] 3 ISRCs únicos extraídos dos top 15 candidatos.
+INFO: ✅ [RB Match] 46 faixas validadas no ReccoBeats a partir dos ISRCs.
+

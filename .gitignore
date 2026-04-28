@@ -44,3 +44,9 @@ models/cycle_03/champion.json
 # ---- Streamlit & Git ----
 .streamlit/secrets.toml
 .gitattributes
+# Regression smoke test generated runs
+tests/regression/runs/
+
+# Python cache
+__pycache__/
+*.pyc
