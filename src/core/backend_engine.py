@@ -1,6 +1,14 @@
-import re, time, requests, logging, ssl
 import concurrent.futures
+import logging
+import re
+import ssl
+import time
+import unicodedata
+import urllib.parse
+from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
@@ -73,14 +81,12 @@ class PopForecastInferenceBackend:
         Includes a YTMusic Bridge (Plan B) and Graceful Degradation (Plan C).
         Acts as a resolver that delegates final payload construction.
         """
-        import time
-        import logging
+
         start_ts = time.time()
         
         # ---------------------------------------------------------
         # PLAN A: MusicBrainz Heuristics
         # ---------------------------------------------------------
-        import logging # Certifique-se de que está importado
 
         if album_name:
             queries = [
@@ -158,13 +164,13 @@ class PopForecastInferenceBackend:
         if not raw_valid_tracks:
             logging.warning(f"ISRC Gap detected for '{track_title}'. Triggering MB-Triangulated Catalog Scan...")
             
-            import time
             yt_album = ""
             
             # 1. YTMusic Context (The Extra Layer of Security)
             try:
                 yt_start = time.time()
                 from ytmusicapi import YTMusic
+
                 yt = YTMusic()
                 yt_results = yt.search(f"{artist_name} {track_title}", filter="songs")
                 
@@ -504,7 +510,7 @@ class PopForecastInferenceBackend:
         Example:
         [14:32:10 | +02.41s] Message...
         """
-        from datetime import datetime
+
         elapsed = time.perf_counter() - start_ts
         wall_ts = datetime.now().strftime("%H:%M:%S")
         prefix = f"[{wall_ts} | +{elapsed:06.2f}s]"
@@ -516,7 +522,6 @@ class PopForecastInferenceBackend:
         """
         Accent-insensitive, punctuation-light normalization for artist matching.
         """
-        import unicodedata
 
         text = str(value or "").strip().lower()
         text = unicodedata.normalize("NFKD", text)
@@ -575,9 +580,6 @@ class PopForecastInferenceBackend:
             return ""
 
         start_ts = time.perf_counter()
-
-        import urllib.parse
-        import requests
 
         mb_headers = {
             "User-Agent": "AnR_Simulator_Engine/1.0",
