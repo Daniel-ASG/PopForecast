@@ -3,7 +3,6 @@ import logging
 import re
 import ssl
 import time
-import unicodedata
 import urllib.parse
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -11,6 +10,12 @@ from typing import Any, Dict, List, Optional
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
+
+from src.core.text_matching import (
+    artist_name_match_score,
+    normalize_artist_name_for_match,
+    normalize_basic_text,
+)
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -30,11 +35,8 @@ class PopForecastInferenceBackend:
         self._last_mb_request_ts = 0.0
 
     def _normalize(self, text: str) -> str:
-        if not text: return ""
-        v = re.sub(r"\([^)]*\)", " ", text) 
-        v = re.sub(r"\[[^\]]*\]", " ", v)   
-        v = re.sub(r"[^\w\s]", " ", v.lower())
-        return re.sub(r"\s+", " ", v).strip()
+        """Backward-compatible wrapper for basic text normalization."""
+        return normalize_basic_text(text)
 
     def _ensure_mb_rate_limit(self) -> None:
         elapsed = time.time() - self._last_mb_request_ts
@@ -519,48 +521,12 @@ class PopForecastInferenceBackend:
         log_fn(f"{prefix} {message}")
 
     def _normalize_artist_name_for_match(self, value: str) -> str:
-        """
-        Accent-insensitive, punctuation-light normalization for artist matching.
-        """
-
-        text = str(value or "").strip().lower()
-        text = unicodedata.normalize("NFKD", text)
-        text = "".join(ch for ch in text if not unicodedata.combining(ch))
-        text = re.sub(r"[^\w\s]", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
+        """Backward-compatible wrapper for artist-name normalization."""
+        return normalize_artist_name_for_match(value)
 
     def _artist_name_match_score(self, query_name: str, candidate_name: str) -> int:
-        """
-        Conservative name matching score.
-        Higher is better.
-        """
-        q = self._normalize_artist_name_for_match(query_name)
-        c = self._normalize_artist_name_for_match(candidate_name)
-
-        if not q or not c:
-            return 0
-
-        if q == c:
-            return 100
-
-        q_tokens = set(q.split())
-        c_tokens = set(c.split())
-
-        if not q_tokens or not c_tokens:
-            return 0
-
-        if q_tokens == c_tokens:
-            return 95
-
-        if q_tokens.issubset(c_tokens):
-            return 80
-
-        overlap = len(q_tokens & c_tokens)
-        if overlap == 0:
-            return 0
-
-        return int((overlap / len(q_tokens)) * 60)
+        """Backward-compatible wrapper for artist-name match scoring."""
+        return artist_name_match_score(query_name, candidate_name)
     
     def _triangulate_rb_artist_id_batch(self, artist_name: str) -> str:
         """
