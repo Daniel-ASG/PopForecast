@@ -1033,3 +1033,17 @@ Observed behavior:
 **Backlog item:** make `_triangulate_rb_artist_id_batch` more resilient to transient MusicBrainz failures, possibly by routing MusicBrainz scout requests through the existing request wrapper or by adding narrowly scoped retry behavior.
 
 **Important:** this is an operational hardening task and must not be mixed with structural refactoring commits.
+
+#### Orphan fallback helpers
+
+Two legacy/private fallback helpers currently appear to be orphaned in the active code path:
+
+- `_perform_deep_catalog_scan`
+- `_rescue_track_from_rb_artist_catalog`
+
+Current grep checks show these methods are defined in `backend_engine.py` but are not called by the active source code.
+
+**Decision:** do not remove or refactor them during the current behavior-preserving refactor. They should be reviewed later in a dedicated cleanup pass, after confirming whether they are still useful as fallback strategies or can be safely deprecated.
+
+**Important:** do not mix orphan-helper cleanup with active fallback refactoring.
+
