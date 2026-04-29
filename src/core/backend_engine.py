@@ -1,4 +1,3 @@
-# import concurrent.futures
 import logging
 import re
 import ssl
@@ -27,6 +26,10 @@ from src.core.curator_menu import (
     build_curator_menu as build_curator_menu_helper,
     build_curator_menu_from_raw_alternatives,
     format_harvested_variants_for_curator_menu,
+)
+from src.core.rb_catalog import (
+    get_rb_album_tracks as get_rb_album_tracks_helper,
+    get_rb_artist_catalog as get_rb_artist_catalog_helper,
 )
 
 
@@ -1080,112 +1083,23 @@ class PopForecastInferenceBackend:
     # DISCOGRAPHY EXPLORER: ReccoBeats (Spotify) Catalog Mapping
     # =====================================================================
     def get_rb_artist_catalog(self, artist_id: str) -> List[Dict]:
-        """ Fetches full paginated albums directly from ReccoBeats, deduplicating by exact name. """
-        if not artist_id: return []
-        
-        logger.info(f"📂 [Catalog Explorer] Iniciando extração de catálogo para Artist ID: {artist_id}")
-        
-        all_raw_items = []
-        current_page = 0
-        total_pages = 1
-        
-        # 1. Sugador de Paginação (Bypassing ReccoBeats limits)
-        while current_page < total_pages:
-            params = {"page": current_page, "size": 25}
-            data = self._request_json(f"{self.rb_url}/artist/{artist_id}/album", self.rb_headers, params)
-            
-            if "_error" in data:
-                logger.error(f"❌ [Catalog Explorer] Erro ao buscar álbuns: {data['_error']}")
-                break
-                
-            if current_page == 0:
-                total_pages = data.get("totalPages", 1)
-                
-            items = data.get("content") or data.get("items") or []
-            all_raw_items.extend(items)
-            current_page += 1
-            
-        logger.info(f"📥 [Catalog Explorer] Download concluído: {len(all_raw_items)} itens brutos encontrados em {total_pages} página(s).")
-            
-        # 2. Motor de Deduplicação (Highest Popularity Wins)
-        albums_dict = {}
-        type_distribution = {"Album": 0, "Single": 0, "Compilation": 0, "Unknown": 0}
-        
-        for alb in all_raw_items:
-            title = alb.get("name", "")
-            if not title: continue
-                
-            pop = int(alb.get("popularity", 0))
-            title_key = title.lower().strip()
-            raw_type = alb.get("albumType", alb.get("album_type", "Unknown")).title()
-            
-            if title_key not in albums_dict or pop > albums_dict[title_key]["popularity"]:
-                albums_dict[title_key] = {
-                    "id": alb.get("id"),
-                    "title": title,
-                    "year": str(alb.get("releaseDate", alb.get("release_date", "0000")))[:4],
-                    "type": raw_type,
-                    "popularity": pop
-                }
-                
-        # Contagem para telemetria estrutural
-        for alb in albums_dict.values():
-            t = alb["type"]
-            if t in type_distribution:
-                type_distribution[t] += 1
-            else:
-                type_distribution["Unknown"] += 1
-                
-        logger.info(f"📊 [Catalog Explorer] Distribuição do catálogo: {type_distribution}")
-                
-        # 3. Ordenação Temporal
-        sorted_albums = sorted(list(albums_dict.values()), key=lambda x: x["year"] if x["year"].isdigit() else "0000", reverse=True)
-        
-        logger.info(f"🗃️ [Catalog Explorer] Catálogo final filtrado: {len(sorted_albums)} itens únicos.")
-        
-        # 4. Amostragem da "sujeira" (Os 5 itens menos populares)
-        if sorted_albums:
-            bottom_5 = sorted(sorted_albums, key=lambda x: x["popularity"])[:5]
-            weird_names = [f"'{a['title']}' (Pop: {a['popularity']}, Tipo: {a['type']})" for a in bottom_5]
-            logger.warning(f"🧟 [Catalog Explorer] Alerta de Sujeira! Os 5 itens MENOS populares retornados: {', '.join(weird_names)}")
-            
-        return sorted_albums
+        """Backward-compatible public wrapper for ReccoBeats artist catalog."""
+        return get_rb_artist_catalog_helper(
+            artist_id=artist_id,
+            rb_url=self.rb_url,
+            rb_headers=self.rb_headers,
+            request_json=self._request_json,
+        )
 
     def get_rb_album_tracks(self, album_id: str) -> List[Dict]:
-        """ Fetches the tracklist for a specific ReccoBeats album and injects track types. """
-        data = self._request_json(f"{self.rb_url}/album/{album_id}/track", self.rb_headers, {"limit": 50})
-        
-        items = data.get("content") or data.get("items") or []
-        if not items: return []
-            
-        tracks = []
-        for track in items:
-            title = track.get("trackTitle", track.get("name", "Unknown Track"))
-            t_lower = title.lower()
-            
-            # --- MOTOR HEURÍSTICO DE TAGS ---
-            track_type = "studio"
-            if "live" in t_lower or "ao vivo" in t_lower:
-                track_type = "live"
-            elif "remix" in t_lower or "mix" in t_lower:
-                track_type = "remix"
-            elif "acoustic" in t_lower or "acústico" in t_lower or "unplugged" in t_lower:
-                track_type = "acoustic"
-            elif "instrumental" in t_lower:
-                track_type = "instrumental"
-            elif "demo" in t_lower:
-                track_type = "demo"
-            # --------------------------------
-                
-            tracks.append({
-                "id": track.get("id"),
-                "title": title,
-                "track_number": track.get("trackNumber", track.get("track_number", 0)),
-                "track_type": track_type # <--- CONTRATO NOVO ENTREGUE
-            })
-            
-        return sorted(tracks, key=lambda x: x["track_number"])
-    
+        """Backward-compatible public wrapper for ReccoBeats album tracks."""
+        return get_rb_album_tracks_helper(
+            album_id=album_id,
+            rb_url=self.rb_url,
+            rb_headers=self.rb_headers,
+            request_json=self._request_json,
+        )
+
     def _normalize_track_variant_title(self, title: str) -> Dict[str, Any]:
         """Backward-compatible wrapper for track-variant title normalization."""
         return normalize_track_variant_title(title)
