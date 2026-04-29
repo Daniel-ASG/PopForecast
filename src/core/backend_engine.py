@@ -31,6 +31,9 @@ from src.core.rb_catalog import (
     get_rb_album_tracks as get_rb_album_tracks_helper,
     get_rb_artist_catalog as get_rb_artist_catalog_helper,
 )
+from src.core.artist_analytics import (
+    get_artist_evolution as get_artist_evolution_helper,
+)
 
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -1319,59 +1322,13 @@ class PopForecastInferenceBackend:
         return final_variants
 
     def get_artist_evolution(self, artist_id: str) -> List[Dict]:
-        """ 
-        Aggregates acoustic DNA over time by sampling the most popular album per year.
-        Returns a time-series ready for Plotly rendering.
-        """
-        if not artist_id: return []
-        
-        # 1. Pega o catálogo completo limpo e deduplicado
-        catalog = self.get_rb_artist_catalog(artist_id)
-        if not catalog: return []
-        
-        # 2. Agrupa pelo ano e guarda apenas o álbum MAIS POPULAR daquele ano
-        best_album_per_year = {}
-        for alb in catalog:
-            year = alb.get("year", "0000")
-            if year == "0000": continue
-            
-            pop = alb.get("popularity", 0)
-            if year not in best_album_per_year or pop > best_album_per_year[year]["popularity"]:
-                best_album_per_year[year] = alb
-                
-        # 3. Extração em lote do DNA (Amostragem: primeira faixa do álbum mais popular)
-        evolution_series = []
-        # Ordenar cronologicamente do mais antigo para o mais novo
-        sorted_years = sorted(best_album_per_year.keys())
-        
-        for year in sorted_years:
-            album = best_album_per_year[year]
-            tracks = self.get_rb_album_tracks(album["id"])
-            
-            if not tracks: continue
-            
-            # Pega a faixa 1 para representar a sonoridade do álbum
-            target_track_id = tracks[0]["id"]
-            
-            # Usa o nosso método blindado para pegar o DNA
-            track_data = self.get_inference_by_rb_id(target_track_id)
-            if not track_data.get("success"): continue
-            
-            features = track_data["inference_payload"]["audio_features"]
-            
-            # Montando o contrato exigido pelo Front-End
-            evolution_series.append({
-                "year": int(year),
-                "key_album": album["title"],
-                "avg_energy": features.get("energy", 0),
-                "avg_acousticness": features.get("acousticness", 0),
-                "avg_valence": features.get("valence", 0),
-                "avg_danceability": features.get("danceability", 0)
-            })
-            
-        return evolution_series
-    
-
+        """Backward-compatible public wrapper for artist evolution analytics."""
+        return get_artist_evolution_helper(
+            artist_id=artist_id,
+            get_artist_catalog=self.get_rb_artist_catalog,
+            get_album_tracks=self.get_rb_album_tracks,
+            get_inference_by_rb_id=self.get_inference_by_rb_id,
+        )
 
 
     # =====================================================================
