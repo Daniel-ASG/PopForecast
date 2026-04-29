@@ -312,7 +312,9 @@ class PopForecastInferenceBackend:
             "inference_payload": result_payload
         }
 
-
+    # Legacy fallback helper:
+    # Currently not called by active source code. Keep unchanged during
+    # behavior-preserving refactors; review in a dedicated cleanup pass.
     def _perform_deep_catalog_scan(self, artist_name: str, track_title: str) -> str:
         """
         Nuclear fallback: Scans the entire artist catalog on ReccoBeats page by page.
@@ -706,6 +708,9 @@ class PopForecastInferenceBackend:
         )
         return best_rb_candidate["matched_artist_id"]
     
+    # Legacy fallback helper:
+    # Currently not called by active source code. Keep unchanged during
+    # behavior-preserving refactors; review in a dedicated cleanup pass.
     def _rescue_track_from_rb_artist_catalog(
         self,
         artist_id: str,
