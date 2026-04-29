@@ -866,3 +866,170 @@ Integrating the complex MoE backend with Streamlit's reactive rendering required
 
 ### 4. Telemetry & Observability
 * **Dirt Sampling & Telemetry:** Added targeted logging checkpoints to `get_rb_artist_catalog` to track pagination and data volume. Implemented a 'dirt sampling' warning to log the 5 least popular items, aiding in the debugging of dirty metadata and catalog distributions.
+
+---
+
+## 📅 CYCLE 09 — SAFE BACKEND REFACTORING & REGRESSION GUARDRAILS
+
+### 1. Refactoring Strategy: Functional Baseline First
+
+After Cycle 08, the backend had become functionally strong but architecturally overloaded.  
+The `backend_engine.py` file still acted as a monolithic orchestration layer, mixing HTTP transport, MusicBrainz search, ReccoBeats catalog access, YTMusic fallback, entity triangulation, track rescue, curator menu construction, payload assembly, and artist analytics.
+
+**Decision:** treat the Cycle 08 monolithic backend as the functional source of truth.
+
+The refactoring strategy follows a conservative rule:
+
+> Preserve behavior first; improve architecture only through small, reversible, regression-tested steps.
+
+No operational changes are allowed during this phase to:
+
+- TLS / SSL handling
+- retry behavior
+- MusicBrainz queries
+- ISRC candidate selection
+- ReccoBeats lookup logic
+- YTMusic fallback behavior
+- MB → RB triangulation
+- catalog rescue
+- final payload contract
+- public backend methods
+
+The public contract to preserve remains:
+
+- `get_inference_data`
+- `get_inference_data_by_id`
+- `get_inference_by_rb_id`
+- `build_curator_menu`
+- `get_rb_artist_catalog`
+- `get_rb_album_tracks`
+- `get_artist_evolution`
+
+---
+
+### 2. Regression Smoke Harness
+
+A manual regression smoke harness was added under:
+
+- `tests/regression/regression_smoke.py`
+- `tests/regression/baselines/`
+
+The harness captures the current backend behavior for six representative track queries:
+
+- Nirvana — `Smells Like Teen Spirit`
+- João Gomes — `Aquelas Coisas`
+- Sia — `Cheap Thrills`
+- Prince — `Purple Rain`
+- ABBA — `Chiquitita`
+- Slipknot — `Duality`
+
+The baseline stores key behavioral fields such as:
+
+- `success`
+- `title`
+- `artist`
+- `album`
+- `original_release_year`
+- `real_market_popularity`
+- `rb_track_id`
+- `rb_artist_id`
+- `isrc`
+- fallback/rescue flags
+- `raw_alternatives_count`
+- payload keys
+
+**Purpose:** detect regressions before committing any backend refactor.
+
+---
+
+### 3. Regression Comparator
+
+A comparator was added to compare fresh smoke-test runs against the frozen Cycle 08 baseline:
+
+- `tests/regression/compare_regression.py`
+
+Differences are classified as:
+
+- **CRITICAL:** behavior-changing regressions, such as track ID changes, success/failure changes, missing payload fields, or changed ISRCs.
+- **WARNING:** potentially external/API-driven changes, such as popularity or alternatives count.
+- **INFO:** expected runtime variation.
+
+**Acceptance rule:** a refactor commit is only accepted when the comparator reports no critical or warning differences.
+
+---
+
+### 4. Incremental Module Extraction
+
+The first refactoring phase avoided API-client extraction and focused on pure or low-risk components.
+
+Completed extractions:
+
+- `src/core/text_matching.py`
+  - basic text normalization
+  - artist-name normalization
+  - artist-name match scoring
+
+- `src/core/track_variant_matching.py`
+  - track-variant normalization
+  - contextual track-type inference
+  - catalog album canonicality scoring
+  - variant representative key construction
+
+- `src/core/constants.py`
+  - default audio feature fallback values
+
+- `src/core/curator_menu.py`
+  - legacy curator menu construction
+  - harvested variant formatting
+  - controlled curator menu dispatch
+
+- `src/core/rb_catalog.py`
+  - ReccoBeats artist catalog extraction
+  - ReccoBeats album tracklist extraction
+
+Each extraction preserves backward-compatible wrappers inside `PopForecastInferenceBackend`, keeping the frontend and public backend contract unchanged.
+
+---
+
+### 5. Architectural Principle Adopted
+
+The refactor follows a transitional facade pattern:
+
+```text
+Frontend / UI
+    ↓
+PopForecastInferenceBackend  ← stable public facade
+    ↓
+Extracted core helper modules
+```
+
+The goal is not to create many tiny modules for its own sake, but to gradually separate cohesive responsibilities while keeping the original backend class as a stable orchestration facade.
+
+The project avoids generic `utils.py` modules. New modules must represent coherent domain responsibilities, such as:
+
+* text matching
+* track variant matching
+* curator menu construction
+* ReccoBeats catalog access
+* artist-level analytics
+
+---
+
+### 6. Known Technical Debt Identified
+
+During regression testing, the João Gomes fallback path exposed a transient MusicBrainz timeout in the MB → RB triangulation step.
+
+Observed behavior:
+
+- MusicBrainz textual search succeeded.
+- Direct ISRC extraction returned no ISRCs for the target track.
+- YTMusic context succeeded.
+- MB artist candidate resolution succeeded.
+- Scout ISRC fetching for one MBID timed out.
+- The triangulation aborted when no scout ISRCs were collected.
+
+**Diagnosis:** this was not caused by the refactor. The affected path lives inside `_triangulate_rb_artist_id_batch`, which still uses direct `requests.get(...)` calls with local timeouts instead of the backend’s centralized `_request_json(...)` wrapper.
+
+**Backlog item:** make `_triangulate_rb_artist_id_batch` more resilient to transient MusicBrainz failures, possibly by routing MusicBrainz scout requests through the existing request wrapper or by adding narrowly scoped retry behavior.
+
+**Important:** this is an operational hardening task and must not be mixed with structural refactoring commits.
