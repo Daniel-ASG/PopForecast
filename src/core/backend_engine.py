@@ -1,4 +1,4 @@
-import concurrent.futures
+# import concurrent.futures
 import logging
 import re
 import ssl
@@ -23,6 +23,12 @@ from src.core.track_variant_matching import (
     normalize_track_variant_title,
     score_catalog_album_canonicality,
 )
+from src.core.curator_menu import (
+    build_curator_menu as build_curator_menu_helper,
+    build_curator_menu_from_raw_alternatives,
+    format_harvested_variants_for_curator_menu,
+)
+
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
@@ -351,168 +357,42 @@ class PopForecastInferenceBackend:
 
     def _build_curator_menu_from_raw_alternatives(
         self,
-        raw_alternatives: List[Dict]
+        raw_alternatives: List[Dict],
     ) -> List[Dict]:
-        """
-        Legacy curator path based only on raw_alternatives.
-        Preserved as a safe fallback during controlled integration.
-        """
-        logger.info(
-            f"Acionando Curator Menu legado para {len(raw_alternatives)} faixas..."
+        """Backward-compatible wrapper for the legacy curator menu path."""
+        return build_curator_menu_from_raw_alternatives(
+            raw_alternatives=raw_alternatives,
+            rb_url=self.rb_url,
+            rb_headers=self.rb_headers,
+            request_json=self._request_json,
+            normalize=self._normalize,
         )
 
-        def fetch_album_data(track: Dict[str, Any]) -> Dict[str, Any]:
-            alb_res = self._request_json(
-                f"{self.rb_url}/track/{track['id']}",
-                self.rb_headers
-            )
-
-            album_name = "Unknown Album"
-            release_year = "????"
-
-            if "_error" not in alb_res and isinstance(alb_res, dict):
-                embedded_album = alb_res.get("album")
-                if embedded_album:
-                    album_name = embedded_album.get("name", "Unknown Album")
-                    release_date = str(
-                        embedded_album.get(
-                            "releaseDate",
-                            embedded_album.get("release_date", "")
-                        )
-                    )
-                    if release_date[:4].isdigit():
-                        release_year = release_date[:4]
-                else:
-                    album_res = self._request_json(
-                        f"{self.rb_url}/track/{track['id']}/album",
-                        self.rb_headers
-                    )
-                    if "_error" not in album_res and album_res.get("content"):
-                        best_album = max(
-                            album_res["content"],
-                            key=lambda x: x.get("popularity", 0)
-                        )
-                        album_name = best_album.get("name", "Unknown Album")
-                        release_date = str(best_album.get("releaseDate", ""))
-                        if release_date[:4].isdigit():
-                            release_year = release_date[:4]
-
-            return {
-                "id": track.get("id"),
-                "title": track.get("trackTitle"),
-                "popularity": int(track.get("popularity", 0) or 0),
-                "album": album_name,
-                "year": release_year,
-                "isrc": track.get("isrc"),
-                "link": track.get("href", ""),
-            }
-
-        all_versions: List[Dict[str, Any]] = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [
-                executor.submit(fetch_album_data, track)
-                for track in raw_alternatives
-                if track.get("id")
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                all_versions.append(future.result())
-
-        unique_versions: Dict[str, Dict[str, Any]] = {}
-        for version in all_versions:
-            key = f"{self._normalize(version['title'])}::{version['album']}"
-            if (
-                key not in unique_versions
-                or version["popularity"] > unique_versions[key]["popularity"]
-            ):
-                unique_versions[key] = version
-
-        final_menu = sorted(
-            list(unique_versions.values()),
-            key=lambda item: item["popularity"],
-            reverse=True,
-        )
-        return final_menu
-    
     def _format_harvested_variants_for_curator_menu(
         self,
-        harvested_variants: List[Dict[str, Any]]
+        harvested_variants: List[Dict[str, Any]],
     ) -> List[Dict[str, Any]]:
-        """
-        Converts harvested catalog variants into the legacy curator menu contract
-        expected by the frontend table.
-        """
-        formatted_menu: List[Dict[str, Any]] = []
+        """Backward-compatible wrapper for harvested variant formatting."""
+        return format_harvested_variants_for_curator_menu(harvested_variants)
 
-        for item in harvested_variants:
-            year_value = item.get("year", 0)
-            formatted_menu.append(
-                {
-                    "id": item.get("track_id"),
-                    "title": item.get("title"),
-                    "popularity": int(item.get("popularity", 0) or 0),
-                    "album": item.get("album", "Unknown Album"),
-                    "year": str(year_value) if year_value else "????",
-                    "isrc": item.get("isrc", ""),
-                    "link": item.get("link", ""),
-                    # Extra metadata kept for future UI upgrades
-                    "track_type": item.get("track_type", "other"),
-                    "track_type_source": item.get("track_type_source", "unknown"),
-                    "match_quality": item.get("match_quality", "base_variant"),
-                    "canonicality_score": item.get("canonicality_score", 0),
-                    "canonicality_tags": item.get("canonicality_tags", []),
-                }
-            )
-
-        return formatted_menu
-    
     def build_curator_menu(
         self,
         raw_alternatives: List[Dict],
         rb_artist_id: Optional[str] = None,
         track_title: Optional[str] = None,
     ) -> List[Dict]:
-        """
-        Controlled integration entrypoint for the curator menu.
-
-        Strategy:
-        1. Try the new catalog harvester when rb_artist_id and track_title exist.
-        2. If harvesting fails or returns nothing, fall back to the legacy menu
-           built from raw_alternatives.
-        """
-        logger.info(
-            "Acionando Curator Menu controlado | "
-            f"raw_alternatives={len(raw_alternatives)} | "
-            f"rb_artist_id={rb_artist_id} | track_title={track_title}"
+        """Backward-compatible public wrapper for curator menu construction."""
+        return build_curator_menu_helper(
+            raw_alternatives=raw_alternatives,
+            rb_url=self.rb_url,
+            rb_headers=self.rb_headers,
+            request_json=self._request_json,
+            normalize=self._normalize,
+            harvest_variants=self._harvest_rb_track_variants_from_catalog,
+            rb_artist_id=rb_artist_id,
+            track_title=track_title,
         )
 
-        if rb_artist_id and track_title:
-            try:
-                harvested_variants = self._harvest_rb_track_variants_from_catalog(
-                    artist_id=rb_artist_id,
-                    track_title=track_title,
-                )
-
-                if harvested_variants:
-                    logger.info(
-                        f"✅ Novo harvester retornou {len(harvested_variants)} variantes."
-                    )
-                    return self._format_harvested_variants_for_curator_menu(
-                        harvested_variants
-                    )
-
-                logger.warning(
-                    "⚠️ Novo harvester retornou vazio. "
-                    "Falling back to legacy raw_alternatives menu."
-                )
-
-            except Exception as exc:
-                logger.error(
-                    f"❌ New curator harvester failed: {exc}. "
-                    "Falling back to legacy raw_alternatives menu."
-                )
-
-        return self._build_curator_menu_from_raw_alternatives(raw_alternatives)
-    
     def _log_timed(self, level: str, start_ts: float, message: str) -> None:
         """
         Logs with wall-clock timestamp plus elapsed time since start_ts.
