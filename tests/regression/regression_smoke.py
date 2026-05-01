@@ -83,6 +83,24 @@ def summarize_result(
         "payload_keys": sorted(inference_payload.keys())
         if isinstance(inference_payload, dict)
         else [],
+        "audio_features_keys": sorted(
+            inference_payload.get("audio_features", {}).keys()
+        )
+        if isinstance(inference_payload, dict)
+        and isinstance(inference_payload.get("audio_features"), dict)
+        else [],
+        "collaborators_count": len(inference_payload.get("collaborators", []))
+        if isinstance(inference_payload, dict)
+        and isinstance(inference_payload.get("collaborators"), list)
+        else 0,
+        "collaborator_keys": sorted(
+            inference_payload["collaborators"][0].keys()
+        )
+        if isinstance(inference_payload, dict)
+        and isinstance(inference_payload.get("collaborators"), list)
+        and inference_payload["collaborators"]
+        and isinstance(inference_payload["collaborators"][0], dict)
+        else [],
     }
 
 
