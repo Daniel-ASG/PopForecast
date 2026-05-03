@@ -23,7 +23,7 @@ DEFAULT_BASELINE_PATH = (
     / "tests"
     / "regression"
     / "baselines"
-    / "baseline_summary_20260427_164250.json"
+    / "baseline_summary_20260502_payload_schema.json"
 )
 
 DEFAULT_RUNS_DIR = PROJECT_ROOT / "tests" / "regression" / "runs"
@@ -41,6 +41,8 @@ CRITICAL_FIELDS = [
     "rescue_source",
     "rescue_match_quality",
     "rescue_track_type",
+    "audio_features_keys",
+    "collaborator_keys",
 ]
 
 WARNING_FIELDS = [
