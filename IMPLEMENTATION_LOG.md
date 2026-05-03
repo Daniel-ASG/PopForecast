@@ -1047,3 +1047,150 @@ Current grep checks show these methods are defined in `backend_engine.py` but ar
 
 **Important:** do not mix orphan-helper cleanup with active fallback refactoring.
 
+---
+
+### 7. Payload Contract Hardening
+
+Before continuing structural backend refactoring, the regression harness was strengthened to protect the frontend-facing payload contract.
+
+Updates made:
+
+- `tests/regression/regression_smoke.py`
+  - now captures `audio_features_keys`;
+  - now captures `collaborators_count`;
+  - now captures `collaborator_keys`.
+
+- `tests/regression/compare_regression.py`
+  - now treats `audio_features_keys` as a critical field;
+  - now treats `collaborator_keys` as a critical field;
+  - now uses the enriched baseline:
+    - `tests/regression/baselines/baseline_summary_20260502_payload_schema.json`.
+
+Rationale:
+
+- The Streamlit frontend depends directly on the `audio_features` dictionary for sliders, radar visualization, and MoE inference.
+- The frontend also depends on collaborator objects containing stable keys, especially:
+  - `id`
+  - `name`
+  - `is_context_target`
+
+Decision:
+
+- `audio_features_keys` and `collaborator_keys` are critical regression fields.
+- `collaborators_count` is collected for observability, but is not currently treated as a critical comparator field because collaborator counts may legitimately vary across API responses or track versions.
+
+Validation:
+
+- The enriched payload-schema baseline passed with no critical or warning differences.
+- This gives the refactor a stronger contract around payload shape, not only top-level track identity fields.
+
+---
+
+### 8. Observational Fallback Smoke Probe
+
+A dedicated fallback probe was added:
+
+- `tests/regression/fallback_smoke.py`
+
+It exercises representative ISRC-gap recovery cases that tend to use the fallback path:
+
+- João Gomes — `Aquelas Coisas`
+- Calcinha Preta — `Agora Estou Sofrendo`
+- Gilberto Gil — `Sandra`
+- Alceu Valença — `Anunciação`
+
+The probe observes the full recovery chain:
+
+```text
+MusicBrainz textual search
+→ no direct target ISRCs
+→ YTMusic context
+→ MusicBrainz → ReccoBeats artist triangulation
+→ ReccoBeats catalog scan
+→ by-ID payload handoff
+```
+
+Decision:
+
+* This file is a **manual observational probe**, not a strict regression comparator.
+* It records expected RB track/artist IDs and schema integrity, but should not yet block commits automatically.
+
+Reason:
+
+* The fallback path is intentionally dependent on external APIs.
+* YTMusic context can oscillate for the same query. For example, João Gomes — `Aquelas Coisas` may resolve through different contextual albums depending on the YTMusic response, producing a different but still plausible RB track ID.
+* Therefore, `fallback_smoke.py` is useful for diagnosis and confidence checks, but should not be treated as a rigid acceptance test until the fallback semantics are made more deterministic.
+
+---
+
+### 9. MB → RB Triangulation Hardening
+
+The transient timeout observed in the fallback path was addressed in a dedicated operational-hardening phase, separate from structural refactoring.
+
+Problem identified earlier:
+
+* `_triangulate_rb_artist_id_batch` still used direct `requests.get(...)` calls for MusicBrainz operations.
+* These calls had local one-off timeouts and bypassed the backend’s shared `_request_json(...)` helper.
+* A transient timeout during scout ISRC collection could abort the entire MB → RB triangulation path.
+
+Changes made in isolated commits:
+
+1. **MusicBrainz artist search hardening**
+
+   * Replaced the direct `requests.get(...)` call used for MB artist candidate search with `_request_json(...)`.
+   * This routes the first MusicBrainz lookup through:
+
+     * the shared session;
+     * existing TLS adapter;
+     * centralized timeout behavior;
+     * retry handling;
+     * MusicBrainz rate limiting.
+
+2. **MusicBrainz scout ISRC fetch hardening**
+
+   * Replaced the direct `requests.get(...)` call used for scout ISRC lookup with `_request_json(...)`.
+   * Removed the now-unused local `mb_headers` block inside `_triangulate_rb_artist_id_batch`.
+   * The method now consistently uses `self.mb_headers` for MusicBrainz requests.
+
+Result:
+
+* `grep -n "requests.get" src/core/backend_engine.py` no longer returns direct calls inside the backend.
+* `_triangulate_rb_artist_id_batch` now routes its MusicBrainz operations through the shared request helper.
+* The previously unstable Gilberto Gil — `Sandra` fallback path resolved successfully after the change.
+
+Validation performed:
+
+* `python -m py_compile src/core/backend_engine.py`
+* focused fallback probe:
+
+  * Gilberto Gil — `Sandra`
+* full observational fallback probe:
+
+  * João Gomes — `Aquelas Coisas`
+  * Calcinha Preta — `Agora Estou Sofrendo`
+  * Gilberto Gil — `Sandra`
+  * Alceu Valença — `Anunciação`
+* full regression smoke:
+
+  * `poetry run python tests/regression/regression_smoke.py --output-dir tests/regression/runs`
+* regression comparator:
+
+  * `poetry run python tests/regression/compare_regression.py`
+
+Acceptance result:
+
+* No critical differences.
+* No warning differences.
+* Only runtime differences classified as INFO.
+
+Important caveat:
+
+* This change improves transport resilience and consistency.
+* It does **not** solve all semantic ambiguity in fallback selection.
+* YTMusic context can still influence which valid catalog version is selected, especially for tracks with multiple releases or repeated appearances across albums.
+
+Decision:
+
+* The MusicBrainz timeout/backoff issue is considered addressed for the current refactor cycle.
+* Further work on fallback determinism, YTMusic context ranking, or canonical version choice must be handled in a separate semantic fallback-improvement phase, not mixed with transport hardening.
+
