@@ -454,14 +454,18 @@ class PopForecastInferenceBackend:
             f"https://musicbrainz.org/ws/2/artist/?query={search_query}&limit=5&fmt=json"
         )
 
-        try:
-            search_res = requests.get(
-                mb_search_url,
-                headers=mb_headers,
-                timeout=5
-            ).json()
-        except Exception as exc:
-            self._log_timed("error", start_ts, f"MB artist search failed for '{artist_name}': {exc}")
+        search_res = self._request_json(
+            mb_search_url,
+            self.mb_headers,
+            is_mb=True,
+        )
+
+        if "_error" in search_res:
+            self._log_timed(
+                "error",
+                start_ts,
+                f"MB artist search failed for '{artist_name}': {search_res['_error']}",
+            )
             return ""
 
         mb_artists = search_res.get("artists", [])
