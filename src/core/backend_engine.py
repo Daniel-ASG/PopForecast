@@ -441,11 +441,6 @@ class PopForecastInferenceBackend:
 
         start_ts = time.perf_counter()
 
-        mb_headers = {
-            "User-Agent": "AnR_Simulator_Engine/1.0",
-            "Accept": "application/json",
-        }
-
         # ---------------------------------------------------------
         # Step 0: Resolve MB artist candidates conservatively
         # ---------------------------------------------------------
@@ -536,17 +531,17 @@ class PopForecastInferenceBackend:
                 f"https://musicbrainz.org/ws/2/recording?query={query}&limit=15&fmt=json"
             )
 
-            try:
-                mb_res = requests.get(
-                    mb_url,
-                    headers=mb_headers,
-                    timeout=10
-                ).json()
-            except Exception as exc:
+            mb_res = self._request_json(
+                mb_url,
+                self.mb_headers,
+                is_mb=True,
+            )
+
+            if "_error" in mb_res:
                 self._log_timed(
                     "warning",
                     start_ts,
-                    f"MB ISRC fetch failed for MBID {mb_artist_id}: {exc}"
+                    f"MB ISRC fetch failed for MBID {mb_artist_id}: {mb_res['_error']}",
                 )
                 continue
 
