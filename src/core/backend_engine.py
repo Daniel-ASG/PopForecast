@@ -9,33 +9,33 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 
-from src.core.constants import DEFAULT_AUDIO_FEATURES
-from src.core.text_matching import (
+from .constants import DEFAULT_AUDIO_FEATURES
+from .text_matching import (
     artist_name_match_score,
     normalize_artist_name_for_match,
     normalize_basic_text,
 )
-from src.core.track_variant_matching import (
+from .track_variant_matching import (
     build_variant_representative_key,
     infer_contextual_track_type,
     normalize_track_variant_title,
     score_catalog_album_canonicality,
 )
-from src.core.curator_menu import (
+from .curator_menu import (
     build_curator_menu as build_curator_menu_helper,
     build_curator_menu_from_raw_alternatives,
     format_harvested_variants_for_curator_menu,
     harvest_rb_track_variants_from_catalog,
 )
-from src.core.rb_catalog import (
+from .rb_catalog import (
     get_rb_album_tracks as get_rb_album_tracks_helper,
     get_rb_artist_catalog as get_rb_artist_catalog_helper,
 )
-from src.core.artist_analytics import (
+from .artist_analytics import (
     get_artist_evolution as get_artist_evolution_helper,
 )
-from src.core.rb_track_inference import resolve_inference_by_rb_track_id
-from src.core.rb_artist_triangulation import triangulate_rb_artist_id_batch
+from .rb_track_inference import resolve_inference_by_rb_track_id
+from .rb_artist_triangulation import triangulate_rb_artist_id_batch
 
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
